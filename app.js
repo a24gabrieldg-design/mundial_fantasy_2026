@@ -85,6 +85,33 @@ let S = {
   currentRankPhase: 'total'
 };
 
+async function refreshUserLeagues(){
+  try{
+    const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    // Como tu doc users/{uid} no tiene `leagues`, recuperamos por cada league documentando miembros
+    // (para pruebas, hacemos consulta dirigida por miembros consultando 1 vez por liga desde localStorage no aplica).
+    // Solución de prueba: listar todas las ligas y filtrar por members.
+    const { collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const all = await getDocs(collection(fbDb(), 'leagues'));
+    const owned=[];
+    all.forEach(d=>{
+      const data=d.data()||{};
+      const mem=data.members||[];
+      if(mem.includes(S.currentUser)) owned.push(d.id);
+    });
+
+    // Cargar en memoria S.leagues
+    S.leagues = S.leagues || {};
+    owned.forEach(code=>{
+      const data = all.docs.find(x=>x.id===code)?.data() || {};
+      S.leagues[code] = data;
+      S.leagues[code].code = code;
+    });
+  }catch(e){
+    console.error('refreshUserLeagues error', e);
+  }
+}
+
 function save(){
   localStorage.setItem('wf26_users',JSON.stringify(S.users));
   localStorage.setItem('wf26_leagues',JSON.stringify(S.leagues));
@@ -285,32 +312,78 @@ function handleLeagueAvatar(input){
   if(!input.files[0]) return;
   const r=new FileReader(); r.onload=e=>{pendingAvatar=e.target.result;const p=document.getElementById('lav-prev');p.src=e.target.result;p.style.display='block';document.querySelectorAll('#lav-up > span').forEach(s=>s.style.display='none');}; r.readAsDataURL(input.files[0]);
 }
-function createLeague(){
+async function createLeague(){
   const name=document.getElementById('lname-inp').value.trim();
   if(!name){document.getElementById('create-err').textContent='Pon un nombre';return;}
   const code=generateCode();
-  S.leagues[code]={name,avatar:pendingAvatar,code,members:[S.currentUser],creator:S.currentUser,createdAt:Date.now()};
-  if(!S.users[S.currentUser].leagues) S.users[S.currentUser].leagues=[];
-  S.users[S.currentUser].leagues.push(code); save();
-  document.getElementById('modal-content').innerHTML=`<div class="modal-title">✅ Liga creada</div>
-  <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Comparte este código con tus amigos:</p>
-  <div class="code-display"><div class="code-text">${code}</div><div class="code-label">Código único de la liga</div></div>
-  <button class="btn-copy" onclick="copyCode('${code}')">📋 Copiar código</button>
-  <div class="msg-ok" id="copy-ok"></div>
-  <button class="btn-primary" style="margin-top:14px" onclick="closeModal();renderLeagues()">Continuar</button>`;
+
+  try{
+    const { doc, setDoc, arrayUnion } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+
+    // Crear doc de liga en Firestore
+    await setDoc(doc(fbDb(), 'leagues', code), {
+      name,
+      avatar: pendingAvatar || null,
+      code,
+      members: [S.currentUser],
+      creatorUid: S.currentUser,
+      createdAt: Date.now()
+    }, { merge: false });
+
+    // (Opcional) marcar en users/{uid} un índice de ligas si existe la estructura.
+    // En tu caso el campo `leagues` no existe, así que lo dejamos sin tocar.
+
+    // Refrescar memoria
+    S.currentLeague = code;
+    S.leagues = S.leagues || {};
+    S.leagues[code] = { name, avatar: pendingAvatar || null, code, members: [S.currentUser], creatorUid: S.currentUser, createdAt: Date.now() };
+
+    document.getElementById('modal-content').innerHTML=`<div class="modal-title">✅ Liga creada</div>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Comparte este código con tus amigos:</p>
+    <div class="code-display"><div class="code-text">${code}</div><div class="code-label">Código único de la liga</div></div>
+    <button class="btn-copy" onclick="copyCode('${code}')">📋 Copiar código</button>
+    <div class="msg-ok" id="copy-ok"></div>
+    <button class="btn-primary" style="margin-top:14px" onclick="closeModal();renderLeagues()">Continuar</button>`;
+  }catch(e){
+    console.error('createLeague error', e);
+    document.getElementById('create-err').textContent='Error al crear liga: ' + (e?.message || String(e));
+  }
 }
 function copyCode(code){ navigator.clipboard.writeText(code).then(()=>{document.getElementById('copy-ok').textContent='¡Copiado!';}).catch(()=>{document.getElementById('copy-ok').textContent='Código: '+code;}); }
-function joinLeague(){
+async function joinLeague(){
   const code=document.getElementById('jcode-inp').value.trim().toUpperCase();
   const err=document.getElementById('join-err');
   if(!code){err.textContent='Introduce el código';return;}
-  if(!S.leagues[code]){err.textContent='❌ Liga no encontrada';return;}
-  const l=S.leagues[code];
-  if(l.members.includes(S.currentUser)){err.textContent='Ya eres miembro';return;}
-  l.members.push(S.currentUser);
-  if(!S.users[S.currentUser].leagues) S.users[S.currentUser].leagues=[];
-  S.users[S.currentUser].leagues.push(code); save();
-  document.getElementById('modal-content').innerHTML=`<div class="modal-title">🎉 ¡Bienvenido!</div><p style="font-size:13px;color:var(--text2);margin-bottom:16px">Ahora eres miembro de <strong style="color:var(--text)">${l.name}</strong></p><button class="btn-primary" onclick="closeModal();renderLeagues()">Ver ligas</button>`;
+
+  try{
+    const { doc, getDoc, updateDoc, arrayUnion } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const snap = await getDoc(doc(fbDb(), 'leagues', code));
+    if(!snap.exists()){
+      err.textContent='❌ Liga no encontrada. Code usado: ' + code;
+      console.log('joinLeague: league not found. code=', code);
+      return;
+    }
+    const l = snap.data();
+
+    // update members (arrayUnion evita duplicados)
+    await updateDoc(doc(fbDb(), 'leagues', code), {
+      members: arrayUnion(S.currentUser)
+    });
+
+    // Guardar índice en users/{uid} para listar rápidamente
+    await updateDoc(doc(fbDb(), 'users', S.currentUser), {
+      leagues: arrayUnion(code)
+    });
+
+    // Refrescar datos en memoria
+    S.currentLeague = code;
+    await refreshUserLeagues();
+
+    document.getElementById('modal-content').innerHTML=`<div class="modal-title">🎉 ¡Bienvenido!</div><p style="font-size:13px;color:var(--text2);margin-bottom:16px">Ahora eres miembro de <strong style="color:var(--text)">${l.name || 'Liga'}</strong></p><button class="btn-primary" onclick="closeModal();renderLeagues()">Ver ligas</button>`;
+  }catch(e){
+    console.error('joinLeague error', e);
+    err.textContent='Error al unirse: ' + (e?.message || String(e));
+  }
 }
 function closeModal(){ document.getElementById('modal-overlay').style.display='none'; pendingAvatar=null; }
 function closeModalBg(e){ if(e.target===document.getElementById('modal-overlay')) closeModal(); }
