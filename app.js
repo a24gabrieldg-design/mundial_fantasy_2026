@@ -6,7 +6,7 @@ const GROUPS = ['A','B','C','D','E','F','G','H','I','J','K','L'];
 // Guardaremos usuarios en Firestore: users/{uid} = { username, avatarUrl }
 // Admin: vamos a detectar admin con un doc admins/{uid} = true (más adelante podemos endurecer reglas).
 
-const ADMIN_EMAIL = 'hackerfantasy00@gmail.com';
+const ADMIN_EMAIL = 'a24gabrieldg@iesantonlosada.gal';
 
 const getFB = () => window.__FIREBASE__ || {};
 const fbAuth = () => getFB().auth;
@@ -66,6 +66,8 @@ const MATCHES_GROUP = makeGroupMatches();
 
 // Knockout phase matches (initially empty, filled by admin)
 const KNOCKOUT_TEMPLATES = {
+
+
   1: Array.from({length:16},(_,i)=>({id:`R16_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-06-29',time:'18:00',locked:true})),
   2: Array.from({length:8},(_,i)=>({id:`QF_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-04',time:'18:00',locked:true})),
   3: Array.from({length:4},(_,i)=>({id:`SF_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-14',time:'18:00',locked:true})),
@@ -77,6 +79,7 @@ let S = {
   leagues: JSON.parse(localStorage.getItem('wf26_leagues')||'{}'),
   predictions: JSON.parse(localStorage.getItem('wf26_preds')||'{}'),
   results: JSON.parse(localStorage.getItem('wf26_results')||'{}'),
+  schedule: JSON.parse(localStorage.getItem('wf26_sched')||'{}'),
   knockoutMatches: JSON.parse(localStorage.getItem('wf26_ko')||'{}'),
   currentUser: localStorage.getItem('wf26_cu')||null,
   currentPhase: 0,
@@ -120,18 +123,33 @@ function save(){
   localStorage.setItem('wf26_ko',JSON.stringify(S.knockoutMatches));
 }
 
-// Admin por email (guardamos el email como username en S.users[uid].username)
-// y comparamos contra ADMIN_EMAIL. Esto evita que el script reviente por ADMIN_USER no definida.
-const isAdmin = () => {
+// Roles
+const getCurrentUserEmail = () => {
   try {
     const u = S.users?.[S.currentUser];
-    const email = u?.username; // en este flujo username=auth email
-    return !!email && String(email).toLowerCase() === String(ADMIN_EMAIL).toLowerCase();
-  } catch (e) {
-    return false;
+    return (u?.username || '').trim();
+  } catch {
+    return '';
   }
 };
 
+// Admin total (global)
+const isTotalAdmin = () => {
+  const email = getCurrentUserEmail();
+  return email && String(email).toLowerCase() === String(ADMIN_EMAIL).toLowerCase();
+};
+
+// Admin de liga (solo creador de esa liga)
+const isLeagueAdminForCurrentLeague = () => {
+  try {
+    if (!S.currentLeague) return false;
+    const l = S.leagues?.[S.currentLeague];
+    if (!l) return false;
+    return String(l.creatorUid) === String(S.currentUser);
+  } catch {
+    return false;
+  }
+};
 
 // ===== AUTH =====
 function switchAuthTab(t){
@@ -250,12 +268,80 @@ async function doLogout(){
     document.getElementById('login-pass').value='';
   }
 }
+const RESULTS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzFtr_v_UbmNoS-7vtlaqFz2ObHyYFmMBXK6WGH2fygBkGeu8ywgbIJ0slk9EaVEs9Xfg/exec'; // actualizado al deployment del doGet nuevo
+let autoResultsTimer = null;
+
+async function fetchResultsFromSheet(){
+  try{
+    const r = await fetch(RESULTS_ENDPOINT, { cache: 'no-store' });
+    const data = await r.json();
+    const resultsMap = data?.results || {};
+    const next = {};
+    Object.keys(resultsMap).forEach(mid=>{
+      const it = resultsMap[mid] || {};
+      const g1 = it.g1;
+      const g2 = it.g2;
+      if(g1 === null || g1 === undefined || g2 === null || g2 === undefined) return;
+      next[mid] = { g1: Number(g1), g2: Number(g2) };
+    });
+    return next;
+  }catch(e){
+    console.error('fetchResultsFromSheet error', e);
+    return null;
+  }
+}
+
+async function startAutoUpdateResults(){
+  try{
+    console.log('[wf26] startAutoUpdateResults');
+  }catch(e){}
+
+  console.log('[wf26] startAutoUpdateResults');
+  // evita múltiples intervals
+  if(autoResultsTimer) clearInterval(autoResultsTimer);
+
+  // refresco inmediato
+  const first = await fetchResultsFromSheet();
+  if(first){
+    S.results = first;
+    save();
+    renderPredTab();
+    renderRanking();
+    renderPhaseBody();
+  }
+
+  autoResultsTimer = setInterval(async ()=>{
+    const next = await fetchResultsFromSheet();
+    if(!next) return;
+
+    const prev = S.results || {};
+    const prevKeys = Object.keys(prev);
+    const nextKeys = Object.keys(next);
+    const changed = prevKeys.length !== nextKeys.length || nextKeys.some(mid=>{
+      const a = next[mid] || {};
+      const b = prev[mid] || {};
+      return Number(a.g1) !== Number(b.g1) || Number(a.g2) !== Number(b.g2);
+    });
+
+    if(!changed) return;
+
+    S.results = next;
+    save();
+    renderPhaseBody();
+    renderPredTab();
+    renderRanking();
+  }, 60000);
+}
+
 function showMain(){
   document.getElementById('auth-screen').classList.remove('active');
   document.getElementById('main-screen').classList.add('active');
-  document.getElementById('top-bar-right').innerHTML = isAdmin()?'<span class="admin-badge">ADMIN</span>':'';
+  document.getElementById('top-bar-right').innerHTML = isTotalAdmin()?'<span class="admin-badge">ADMIN</span>':'';
   goTab('ligas',0); renderProfileInfo();
+  startAutoUpdateResults();
 }
+
+
 
 // ===== NAV =====
 function goTab(name,idx){
@@ -419,8 +505,13 @@ function pickLeagueForPreds(code){
 
 function renderPredTab(){
   const inner=document.getElementById('pred-inner');
-  const ul=S.users[S.currentUser]?.leagues||[];
+  if(!inner){
+    console.error('renderPredTab: pred-inner missing');
+    return;
+  }
+  const ul=Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
   if(!ul.length){ inner.innerHTML=`<div class="no-league-banner">Únete o crea una <span>liga</span> para hacer predicciones</div>`; return; }
+
   if(!S.currentLeague||!S.leagues[S.currentLeague]){
     const l=S.leagues[ul[0]];
     inner.innerHTML=`<div style="padding:0 0 8px">
@@ -460,11 +551,11 @@ function renderPhaseBody(){
     body.innerHTML=tabsHtml+`<div id="gmatches"></div>`;
     renderGroupMatchList();
   } else {
-    const unlockDt=new Date(['','2026-06-29','2026-07-04','2026-07-12','2026-07-19'][S.currentPhase]+'T00:00:00');
+const unlockDt=new Date(['','2026-06-29','2026-07-04','2026-07-12','2026-07-19'][S.currentPhase]+'T00:00:00');
     const now=new Date(); const diff=unlockDt-now;
     const koMatches=S.knockoutMatches[S.currentPhase]||KNOCKOUT_TEMPLATES[S.currentPhase];
     const allDefined=koMatches.some(m=>m.n1!=='Por definir');
-    if(diff>0 && !allDefined && !isAdmin()){
+if(diff>0 && !allDefined && !isTotalAdmin()){ 
       const d=Math.floor(diff/(864e5)), h=Math.floor((diff%(864e5))/36e5);
       body.innerHTML=`<div class="lock-card"><div class="lock-icon">🔒</div><div class="lock-msg">${PHASES[S.currentPhase]}</div><div class="lock-time">${d}d ${h}h</div><div class="lock-sub">Se desbloquea cuando se conozcan los cruces</div></div>`;
       return;
@@ -497,7 +588,13 @@ function renderKOMatches(){
 
 function matchCardHTML(m, preds){
   const p=preds[m.id]||{g1:'',g2:''};
-  const matchDt=new Date(m.date+'T'+m.time+':00');
+  const sd = S.schedule?.[m.id];
+  // sd.time ya viene en hora de España; evitamos que el navegador la interprete en otra zona horaria.
+  // Construimos la fecha como "local" para que HH:MM se mantenga.
+  const matchDtParts = (sd?.date || m.date).split('-');
+  const [Y, M, D] = matchDtParts;
+  const [hh, mm] = (sd?.time || m.time).split(':');
+  const matchDt = new Date(Number(Y), Number(M)-1, Number(D), Number(hh), Number(mm), 0);
   const closeDt=new Date(matchDt.getTime()-5*60*1000);
   const now=new Date();
   const locked=now>=closeDt || m.locked;
@@ -528,7 +625,7 @@ function matchCardHTML(m, preds){
   }
 
   let adminRow='';
-  if(isAdmin()){
+if(isTotalAdmin()){
     const rg1=res?res.g1:'';const rg2=res?res.g2:'';
     adminRow=`<div class="admin-row">
       <span style="font-size:10px;color:var(--admin);font-weight:700">ADMIN:</span>
@@ -541,6 +638,7 @@ function matchCardHTML(m, preds){
   }
 
   return `<div class="match-card${finished?' finished':''}" id="mc-${m.id}">
+
     <div class="match-row">
       <div class="team-side">
         <span class="team-flag">${m.t1}</span>
@@ -673,7 +771,7 @@ function setRankPhase(f){ S.currentRankPhase=f; renderRanking(); }
 // ===== INFO =====
 function renderProfileInfo(){
   const el=document.getElementById('profile-username-display');
-  if(el) el.textContent=S.currentUser+(isAdmin()?' 👑':'');
+if(el) el.textContent=S.currentUser+(isTotalAdmin()?' 👑':'');
   const ab=document.getElementById('profile-avatar-big');
   if(ab){
     const ua=S.users[S.currentUser]?.avatar;

@@ -146,16 +146,37 @@
       </div>
     </div>
 
-    <!-- MODAL -->
+    <!-- MODAL (USUARIO / LIGA) -->
     <div id="modal-overlay" style="display:none" class="modal-overlay" onclick="closeModalBg(event)">
       <div class="modal" onclick="event.stopPropagation()">
         <div class="modal-handle"></div>
         <div id="modal-content"></div>
       </div>
     </div>
+
+    <!-- MODAL ADMIN GLOBAL -->
+    <div id="admin-overlay" style="display:none" class="modal-overlay" onclick="closeAdminModalBg(event)">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div id="admin-modal-content"></div>
+      </div>
+    </div>
   </div>
 
-<script src="app.js"></script>
+
+		<script src="app.js"></script>
+<script>
+  // Evita que al abrir como file:// por doble click falle el acceso a endpoints.
+  // Si estás en file://, mostramos una pista clara.
+  if (location.protocol === 'file:') {
+    console.warn('[wf26] Abriendo como file://; usa Live Server para que funcione el fetch del schedule.');
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#111;color:#fff;padding:10px 14px;font-size:12px;z-index:9999;border-bottom:1px solid rgba(255,255,255,0.2)';
+    el.textContent = 'Abre index.html desde un servidor (Live Server / http://localhost). Si lo abres con doble click (file://) las llamadas de red pueden fallar y la hora se verá mal.';
+    document.body.appendChild(el);
+  }
+</script>
 </body>
 </html>
+
 
