@@ -390,8 +390,10 @@ function closeModalBg(e){ if(e.target===document.getElementById('modal-overlay')
 
 function renderLeagues(){
   const list=document.getElementById('leagues-list');
-  const ul=S.users[S.currentUser]?.leagues||[];
-  const valid=ul.filter(c=>S.leagues[c]);
+  // Usamos S.leagues (cargadas desde Firestore) en vez de users/{uid}.leagues,
+  // porque la UI depende de esto para mostrar “Mis ligas”.
+  const ul = Object.keys(S.leagues || {}).filter(c => S.leagues[c]);
+  const valid = ul;
   if(!valid.length){ list.innerHTML=`<div class="empty-state"><div class="ei">🏆</div><p>Aún no tienes ligas.<br>¡Crea una o únete!</p></div>`; return; }
   list.innerHTML=valid.map(code=>{
     const l=S.leagues[code]; const pts=getUserPts(S.currentUser,code,'total');
