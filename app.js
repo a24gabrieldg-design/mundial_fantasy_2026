@@ -409,6 +409,7 @@ async function createLeague(){
   try{
     const { doc, setDoc, arrayUnion } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
 
+
     // Crear doc de liga en Firestore
     await setDoc(doc(fbDb(), 'leagues', code), {
       name,
@@ -418,9 +419,6 @@ async function createLeague(){
       creatorUid: S.currentUser,
       createdAt: Date.now()
     }, { merge: false });
-
-    // (Opcional) marcar en users/{uid} un índice de ligas si existe la estructura.
-    // En tu caso el campo `leagues` no existe, así que lo dejamos sin tocar.
 
     // Refrescar memoria
     S.currentLeague = code;
@@ -438,6 +436,7 @@ async function createLeague(){
     document.getElementById('create-err').textContent='Error al crear liga: ' + (e?.message || String(e));
   }
 }
+
 function copyCode(code){ navigator.clipboard.writeText(code).then(()=>{document.getElementById('copy-ok').textContent='¡Copiado!';}).catch(()=>{document.getElementById('copy-ok').textContent='Código: '+code;}); }
 async function joinLeague(){ 
 
@@ -804,33 +803,88 @@ function getUserPts(user, leagueCode, phase){
   return Object.values(up).reduce((acc,p)=>acc+(p.points||0),0);
 }
 
-function renderRanking(){
-  const ul=S.users[S.currentUser]?.leagues||[];
+async function ensureUsersLoaded(uids){
+  try{
+    const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const need = (uids||[]).filter(uid => uid && !S.users?.[uid]);
+    await Promise.all(need.map(async uid=>{
+      const snap = await getDoc(doc(fbDb(),'users',uid));
+      if(snap.exists()){
+        const d=snap.data()||{};
+        S.users[uid] = { username: d.username || '', avatar: d.avatarUrl || null };
+      } else {
+        S.users[uid] = { username: uid, avatar: null };
+      }
+    }));
+  }catch(e){
+    console.error('ensureUsersLoaded error', e);
+  }
+}
+
+async function renderRanking(){
+  // NOTA: renderRanking es async porque carga datos de usuarios.
+
+  const listEl=document.getElementById('ranking-list');
   const filtersEl=document.getElementById('ranking-filters');
+  if(!listEl||!filtersEl) return;
+
+  // asegurar que tenemos usuarios cargados (integrantes de ligas)
+  const myLeagues = Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
+  if(!myLeagues.length){
+    listEl.innerHTML=`<div class="empty-state"><div class="ei">📊</div><p>Únete a una liga para ver la tabla</p></div>`;
+    filtersEl.innerHTML=['Total',...PHASES].map((f,i)=>{
+      const fv=i===0?'total':i-1;
+      return `<div class="filter-btn${S.currentRankPhase===fv?' active':''}" onclick="setRankPhase(${i===0?"'total'":i-1})">${f}</div>`;
+    }).join('');
+    return;
+  }
+
   filtersEl.innerHTML=['Total',...PHASES].map((f,i)=>{
     const fv=i===0?'total':i-1;
     return `<div class="filter-btn${S.currentRankPhase===fv?' active':''}" onclick="setRankPhase(${i===0?"'total'":i-1})">${f}</div>`;
   }).join('');
-  const listEl=document.getElementById('ranking-list');
-  if(!ul.length){listEl.innerHTML=`<div class="empty-state"><div class="ei">📊</div><p>Únete a una liga para ver la tabla</p></div>`;return;}
-  let html='';
-  ul.filter(c=>S.leagues[c]).forEach(code=>{
+
+  const memberUids=[];
+  myLeagues.forEach(code=>{
     const l=S.leagues[code];
-    const scores=l.members.map(m=>({m,pts:getUserPts(m,code,S.currentRankPhase),user:S.users[m]}));
+    (l?.members||[]).forEach(uid=>memberUids.push(uid));
+  });
+  memberUids.push(S.currentUser);
+  await ensureUsersLoaded([...new Set(memberUids)]);
+
+  let html='';
+  myLeagues.filter(code=>S.leagues[code]).forEach(code=>{
+    const l=S.leagues[code];
+    const scores=(l.members||[]).map(m=>({
+      uid:m,
+      name:S.users?.[m]?.username || m,
+      pts:getUserPts(m,code,S.currentRankPhase),
+      avatar:S.users?.[m]?.avatar
+    }));
     scores.sort((a,b)=>b.pts-a.pts);
     html+=`<div class="rank-league-label">${l.name}</div>`;
     scores.forEach((s,i)=>{
       const posC=i===0?'gold':i===1?'silver':i===2?'bronze':'';
       const posI=i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1;
-      const isMe=s.m===S.currentUser;
-      let av=s.user?.avatar?`<img src="${s.user.avatar}">`:`<span style="font-size:16px">😎</span>`;
-      html+=`<div class="rank-item${isMe?' me':''}"><div class="rank-pos ${posC}">${posI}</div><div class="rank-avatar">${av}</div><div class="rank-name">${s.m}${isMe?' (Tú)':''}</div><div class="rank-pts">${s.pts}</div></div>`;
+      const isMe=s.uid===S.currentUser;
+      const av=s.avatar?`<img src="${s.avatar}">`:`<span style="font-size:16px">😎</span>`;
+      html+=`<div class="rank-item${isMe?' me':''}"><div class="rank-pos ${posC}">${posI}</div><div class="rank-avatar">${av}</div><div class="rank-name">${s.name}${isMe?' (Tú)':''}</div><div class="rank-pts">${s.pts}</div></div>`;
     });
   });
+
   listEl.innerHTML=html;
 }
 
-function setRankPhase(f){ S.currentRankPhase=f; renderRanking(); }
+
+async function renderRankingOld(){
+  // placeholder
+}
+
+// (legacy accidental appended code removed)
+
+// (comentado legacy original eliminado para evitar tokens de comentario rotos)
+
+function setRankPhase(f){ S.currentRankPhase=f; renderRanking().catch(()=>{}); }
 
 // ===== INFO =====
 function renderProfileInfo(){
