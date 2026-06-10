@@ -1,8 +1,0 @@
-TODO_admin_modal_step.txt
-
-Paso 1 (hecho): En app.js se implementó polling de resultados.
-Paso 2 (hecho): Se creó un Apps Script `AppsScript_worldcup26_results.js` que obtiene resultados desde https://worldcup26.ir/get/games y devuelve JSON en formato {results:{matchId:{g1,g2}}}.
-Paso 3 (falta): En el Apps Script real (Google Apps Script) reemplazar el endpoint doGet() por el de `AppsScript_worldcup26_results.js` (o copiar su contenido en el proyecto).
-Paso 4 (falta): Asegurar que el endpoint publicado apunte a ese doGet() y que en app.js `RESULTS_ENDPOINT` sea el de ese despliegue.
-Paso 5 (falta): Probar en navegador que los partidos pasan a “Finalizado” al cambiar el estado del feed.
-
