@@ -327,6 +327,12 @@ async function startAutoUpdateResults(){
     if(!changed && !schedChanged) return;
     S.results = nextResults;
     S.schedule = nextSchedule;
+    // Limpiar cache de predictions de otros usuarios para forzar recarga de puntos
+    Object.keys(S.predictions||{}).forEach(leagueCode=>{
+      Object.keys(S.predictions[leagueCode]||{}).forEach(uid=>{
+        if(uid !== S.currentUser) delete S.predictions[leagueCode][uid];
+      });
+    });
     save();
     renderPhaseBody();
     renderPredTab();
@@ -755,17 +761,26 @@ async function adminSetResult(mid){
       const data=dSnap.data()||{};
       const p=data[mid]||{g1:'',g2:''};
       const pts=calcPoints(rg,p);
+      const updated = { ...data, [mid]: { ...p, points: pts } };
+      // Calcular total acumulado para que otros usuarios puedan leerlo
+      const totalPts = Object.values(updated).reduce((acc,v)=>acc+(v?.points||0),0);
+      updated._totalPts = totalPts;
       await setDoc(
         doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid),
-        { ...data, [mid]: { ...p, points: pts } },
+        updated,
         { merge: false }
       );
     }));
 
-    // 3) Actualizar cache local y redibujar
+    // 3) Limpiar cache de otros usuarios y redibujar
     S.results[mid]=rg;
+    Object.keys(S.predictions[S.currentLeague]||{}).forEach(uid=>{
+      if(uid !== S.currentUser) delete S.predictions[S.currentLeague][uid];
+    });
     renderPhaseBody();
     renderRanking();
+    const ind=document.getElementById('save-ind');
+    if(ind){ind.textContent='✅ Resultado guardado';setTimeout(()=>{if(ind)ind.textContent='';},2000);}
   }catch(e){ console.error('adminSetResult error', e); }
 }
 
@@ -773,7 +788,6 @@ function forceToggleLock(mid, val){
   const key=`wf26_forced_lock_${mid}`;
   if(val==='clear') localStorage.removeItem(key);
   else localStorage.setItem(key,val);
-  renderPhaseBody();
   renderPredTab();
 }
 
@@ -789,9 +803,15 @@ async function adminRecalc(mid){
       const uid=dSnap.id, data=dSnap.data()||{};
       const p=data[mid]||{g1:'',g2:''};
       const pts=calcPoints(rg,p);
-      await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid), {...data,[mid]:{...p,points:pts}}, {merge:false});
+      const updated = {...data,[mid]:{...p,points:pts}};
+      updated._totalPts = Object.values(updated).reduce((acc,v)=>acc+(v?.points||0),0);
+      await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid), updated, {merge:false});
     }));
+    Object.keys(S.predictions[S.currentLeague]||{}).forEach(uid=>{
+      if(uid !== S.currentUser) delete S.predictions[S.currentLeague][uid];
+    });
     renderPhaseBody();
+    renderRanking();
     const ind=document.getElementById('save-ind');
     if(ind){ind.textContent='✅ Puntos recalculados';setTimeout(()=>{if(ind)ind.textContent='';},2000);}
   }catch(e){ console.error('adminRecalc error', e); }
@@ -819,22 +839,27 @@ function calcPoints(res, pred){
 // ===== RANKING =====
 function getUserPts(user, leagueCode, phase){
   if(!S.predictions[leagueCode]||!S.predictions[leagueCode][user]) return 0;
-  return Object.values(S.predictions[leagueCode][user]).reduce((acc,p)=>acc+(p.points||0),0);
+  const data = S.predictions[leagueCode][user];
+  // Si hay un _totalPts precalculado y no es el usuario actual (no tenemos datos completos), usarlo
+  if(user !== S.currentUser && data._totalPts !== undefined) return data._totalPts;
+  return Object.entries(data).reduce((acc,[k,p])=> k==='_totalPts' ? acc : acc+(p?.points||0), 0);
 }
 
-// Carga desde Firestore las predicciones de todos los miembros de una liga
-// que aún no estén en cache local (S.predictions[leagueCode][uid])
+// Carga desde Firestore las predicciones de todos los miembros de una liga.
+// Para el usuario actual usa la cache (ya se cargó al login).
+// Para el resto SIEMPRE recarga desde Firestore para tener puntos frescos.
 async function ensureLeaguePredictionsLoaded(leagueCode, memberUids){
   try{
     const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     if(!S.predictions[leagueCode]) S.predictions[leagueCode] = {};
-    const need = (memberUids||[]).filter(uid => uid && !S.predictions[leagueCode][uid]);
+    // Solo saltamos la carga del usuario actual (sus preds ya están en cache y son las más fiables)
+    const need = (memberUids||[]).filter(uid => uid && uid !== S.currentUser);
     await Promise.all(need.map(async uid => {
       try{
         const snap = await getDoc(doc(fbDb(), 'leagues', leagueCode, 'predictions', uid));
         S.predictions[leagueCode][uid] = snap.exists() ? (snap.data()||{}) : {};
       }catch(e){
-        S.predictions[leagueCode][uid] = {};
+        // Sin permisos para leer este uid (normal para usuarios no-admin): dejar lo que haya
       }
     }));
   }catch(e){ console.error('ensureLeaguePredictionsLoaded error', e); }
