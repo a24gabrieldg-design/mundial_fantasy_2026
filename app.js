@@ -202,6 +202,10 @@ async function doLogin(){
     } else {
       S.users[uid] = { username: email, firstName: '', avatar: null };
     }
+
+    // Importante: cargar predicciones guardadas en Firestore para que persistan tras cerrar sesión
+    await loadPredictionsFromFirestoreForCurrentUser();
+
     showMain();
   }catch(e){
     console.error('doLogin error', e);
@@ -804,6 +808,7 @@ function getUserPts(user, leagueCode, phase){
 }
 
 async function ensureUsersLoaded(uids){
+
   try{
     const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const need=(uids||[]).filter(uid=>uid&&!S.users?.[uid]);
@@ -904,6 +909,37 @@ async function renderRanking(){
 
 function setRankPhase(f){ S.currentRankPhase=f; renderRanking().catch(()=>{}); }
 
+// ===== PREDICCIONES (Firestore -> cache local) =====
+async function loadPredictionsFromFirestoreForCurrentUser(){
+  try{
+    if(!S.currentUser) return;
+    // Asegura que S.leagues esté poblado
+    const leagueCodes = Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
+    if(!leagueCodes.length) return;
+
+    // Estructura esperada en UI:
+    // S.predictions[leagueCode][userUid][matchId] = {g1,g2,points?}
+    if(!S.predictions) S.predictions = {};
+
+    const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+
+    for(const code of leagueCodes){
+      const predRef = doc(fbDb(), 'leagues', code, 'predictions', S.currentUser);
+      const snap = await getDoc(predRef);
+      if(!snap.exists()) continue;
+      const data = snap.data() || {};
+
+      // data es un objeto { [matchId]: {g1,g2,points?} }
+      // lo volcamos tal cual para que la UI pinte g1/g2 y ranking use points si existen.
+      if(!S.predictions[code]) S.predictions[code] = {};
+      S.predictions[code][S.currentUser] = data;
+    }
+  }catch(e){
+    console.error('loadPredictionsFromFirestoreForCurrentUser error', e);
+  }
+}
+
+
 // ===== INFO / PERFIL =====
 function getDisplayName(uid){
   const u=S.users?.[uid];
@@ -964,6 +1000,9 @@ if(S.currentUser){
 
     // sincronizar ligas desde Firestore para evitar que localStorage esté vacío
     await refreshUserLeagues();
+
+    // cargar predicciones guardadas en Firestore para que persistan tras recargar
+    await loadPredictionsFromFirestoreForCurrentUser();
 
     showMain();
   })();
