@@ -10,6 +10,9 @@ const ADMIN_RESULT_DEFAULTS = {
 };
 
 const ADMIN_EMAIL = 'a24gabrieldg@iesantonlosada.gal';
+// Nota: las reglas Firestore deben permitir escrituras a Admin Total.
+// En app.js solo podemos identificar al admin por email; Firestore rules deben implementar la misma lógica.
+
 
 const getFB = () => window.__FIREBASE__ || {};
 const fbAuth = () => getFB().auth;
