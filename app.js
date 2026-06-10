@@ -295,14 +295,33 @@ async function fetchResultsFromSheet(){
   }
 }
 
+// Carga todos los resultados forzados por el admin desde Firestore (todas las ligas del usuario)
+async function fetchAdminResultsFromFirestore(){
+  try{
+    const { collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const leagueCodes = Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
+    const adminResults = {};
+    await Promise.all(leagueCodes.map(async code=>{
+      try{
+        const snaps = await getDocs(collection(fbDb(), 'leagues', code, 'results'));
+        snaps.forEach(d=>{ adminResults[d.id] = d.data(); });
+      }catch(e){ /* sin permisos o vacio */ }
+    }));
+    return adminResults;
+  }catch(e){
+    console.error('fetchAdminResultsFromFirestore error', e);
+    return {};
+  }
+}
+
 async function startAutoUpdateResults(){
   console.log('[wf26] startAutoUpdateResults');
   if(autoResultsTimer) clearInterval(autoResultsTimer);
 
-  const first = await fetchResultsFromSheet();
+  const [first, adminResults] = await Promise.all([fetchResultsFromSheet(), fetchAdminResultsFromFirestore()]);
   if(first){
-    S.results = first.results || {};
     S.schedule = first.schedule || {};
+    S.results = { ...(first.results||{}), ...adminResults };
     save();
     renderPredTab();
     renderRanking();
@@ -310,9 +329,9 @@ async function startAutoUpdateResults(){
   }
 
   autoResultsTimer = setInterval(async ()=>{
-    const next = await fetchResultsFromSheet();
+    const [next, adminRes] = await Promise.all([fetchResultsFromSheet(), fetchAdminResultsFromFirestore()]);
     if(!next) return;
-    const nextResults = next.results || {};
+    const nextResults = { ...(next.results||{}), ...adminRes };
     const nextSchedule = next.schedule || {};
     const prev = S.results || {};
     const changed = Object.keys(nextResults).some(mid=>{
@@ -327,7 +346,6 @@ async function startAutoUpdateResults(){
     if(!changed && !schedChanged) return;
     S.results = nextResults;
     S.schedule = nextSchedule;
-    // Limpiar cache de predictions de otros usuarios para forzar recarga de puntos
     Object.keys(S.predictions||{}).forEach(leagueCode=>{
       Object.keys(S.predictions[leagueCode]||{}).forEach(uid=>{
         if(uid !== S.currentUser) delete S.predictions[leagueCode][uid];
