@@ -729,7 +729,7 @@ function matchCardHTML(m, preds){
 
   const adminLockControls = isTotalAdmin() ? `
     <div class="admin-lock-controls">
-      <button class="btn-admin" onclick="forceToggleLock('${m.id}','0')">Reabrir</button>
+      <button class="btn-admin" onclick="adminClearResult('${m.id}')" style="border-color:#ef4444;color:#ef4444">Borrar resultado</button>
       <button class="btn-admin" onclick="forceToggleLock('${m.id}','1')">Cerrar</button>
       <button class="btn-admin" onclick="forceToggleLock('${m.id}','clear')">Reset</button>
     </div>` : '';
@@ -826,6 +826,43 @@ function forceToggleLock(mid, val){
   if(val==='clear') localStorage.removeItem(key);
   else localStorage.setItem(key,val);
   renderPredTab();
+}
+
+async function adminClearResult(mid){
+  if(!S.currentLeague) return;
+  if(!confirm('¿Borrar el resultado de este partido? Los puntos calculados se perderán.')) return;
+  try{
+    const { doc, deleteDoc, collection, getDocs, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+
+    // 1) Borrar resultado de Firestore
+    await deleteDoc(doc(fbDb(), 'leagues', S.currentLeague, 'results', mid));
+
+    // 2) Limpiar el campo points de ese partido en todas las predicciones
+    const predSnaps = await getDocs(collection(fbDb(), 'leagues', S.currentLeague, 'predictions'));
+    await Promise.all(predSnaps.docs.map(async (dSnap)=>{
+      const uid = dSnap.id;
+      const data = dSnap.data() || {};
+      if(!data[mid]) return;
+      const updated = { ...data, [mid]: { g1: data[mid].g1??'', g2: data[mid].g2??'' } };
+      // Recalcular _totalPts sin este partido
+      updated._totalPts = Object.entries(updated).reduce((acc,[k,v])=> k==='_totalPts'?acc : acc+(v?.points||0), 0);
+      await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid), updated, { merge: false });
+    }));
+
+    // 3) Limpiar cache local
+    delete S.results[mid];
+    if(S.adminResults) delete S.adminResults[mid];
+    localStorage.setItem('wf26_admin_results', JSON.stringify(S.adminResults||{}));
+    // Limpiar cache de otros usuarios para forzar recarga
+    Object.keys(S.predictions[S.currentLeague]||{}).forEach(uid=>{
+      if(uid !== S.currentUser) delete S.predictions[S.currentLeague][uid];
+    });
+
+    renderPhaseBody();
+    renderRanking();
+    const ind = document.getElementById('save-ind');
+    if(ind){ ind.textContent='🗑️ Resultado borrado'; setTimeout(()=>{ if(ind) ind.textContent=''; }, 2000); }
+  }catch(e){ console.error('adminClearResult error', e); alert('Error al borrar: '+(e?.message||String(e))); }
 }
 
 async function adminRecalc(mid){
