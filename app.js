@@ -741,16 +741,28 @@ async function adminSetResult(mid){
   try{
     const { doc, setDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const rg = { g1: parseInt(g1), g2: parseInt(g2) };
+
+    // 1) Guardar resultado
     await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'results', mid), rg, { merge: true });
+
+    // 2) Recalcular points para TODAS las predicciones de la liga
     const predSnaps = await getDocs(collection(fbDb(), 'leagues', S.currentLeague, 'predictions'));
     await Promise.all(predSnaps.docs.map(async (dSnap)=>{
-      const uid=dSnap.id, data=dSnap.data()||{};
+      const uid=dSnap.id;
+      const data=dSnap.data()||{};
       const p=data[mid]||{g1:'',g2:''};
       const pts=calcPoints(rg,p);
-      await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid), {...data,[mid]:{...p,points:pts}}, {merge:false});
+      await setDoc(
+        doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid),
+        { ...data, [mid]: { ...p, points: pts } },
+        { merge: false }
+      );
     }));
+
+    // 3) Actualizar cache local y redibujar
     S.results[mid]=rg;
     renderPhaseBody();
+    renderRanking();
   }catch(e){ console.error('adminSetResult error', e); }
 }
 
