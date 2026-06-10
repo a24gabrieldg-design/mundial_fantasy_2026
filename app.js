@@ -822,6 +822,24 @@ function getUserPts(user, leagueCode, phase){
   return Object.values(S.predictions[leagueCode][user]).reduce((acc,p)=>acc+(p.points||0),0);
 }
 
+// Carga desde Firestore las predicciones de todos los miembros de una liga
+// que aún no estén en cache local (S.predictions[leagueCode][uid])
+async function ensureLeaguePredictionsLoaded(leagueCode, memberUids){
+  try{
+    const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    if(!S.predictions[leagueCode]) S.predictions[leagueCode] = {};
+    const need = (memberUids||[]).filter(uid => uid && !S.predictions[leagueCode][uid]);
+    await Promise.all(need.map(async uid => {
+      try{
+        const snap = await getDoc(doc(fbDb(), 'leagues', leagueCode, 'predictions', uid));
+        S.predictions[leagueCode][uid] = snap.exists() ? (snap.data()||{}) : {};
+      }catch(e){
+        S.predictions[leagueCode][uid] = {};
+      }
+    }));
+  }catch(e){ console.error('ensureLeaguePredictionsLoaded error', e); }
+}
+
 async function ensureUsersLoaded(uids){
 
   try{
@@ -899,7 +917,11 @@ async function renderRanking(){
   const memberUids=[];
   (selectedLeague?.members||[]).forEach(uid=>memberUids.push(uid));
   memberUids.push(S.currentUser);
-  await ensureUsersLoaded([...new Set(memberUids)]);
+  const uniqueUids = [...new Set(memberUids)];
+  await ensureUsersLoaded(uniqueUids);
+
+  // Cargar predicciones de todos los miembros desde Firestore si no están en cache
+  await ensureLeaguePredictionsLoaded(selected, uniqueUids);
 
   // Render SOLO la liga seleccionada
   let html='';
