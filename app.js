@@ -95,6 +95,8 @@ let S = {
   schedule: JSON.parse(localStorage.getItem('wf26_sched')||'{}'),
   // resultados forzados por admin: cache permanente, nunca machacado por polling
   adminResults: JSON.parse(localStorage.getItem('wf26_admin_results')||'{}'),
+  // partidos vetados por admin (borrados manualmente): la API no puede sobreescribirlos
+  vetoed: JSON.parse(localStorage.getItem('wf26_vetoed')||'{}'),
   currentUser: localStorage.getItem('wf26_cu')||null,
   currentPhase: 0,
   currentGroup: 'A',
@@ -150,6 +152,7 @@ function save(){
   localStorage.setItem('wf26_results',JSON.stringify(S.results||{}));
   localStorage.setItem('wf26_sched',JSON.stringify(S.schedule||{}));
   localStorage.setItem('wf26_admin_results',JSON.stringify(S.adminResults||{}));
+  localStorage.setItem('wf26_vetoed',JSON.stringify(S.vetoed||{}));
 }
 
 const getCurrentUserEmail = () => {
@@ -297,26 +300,35 @@ async function fetchResultsFromSheet(){
   }
 }
 
-// Carga todos los resultados forzados por el admin desde Firestore (todas las ligas del usuario).
-// Actualiza S.adminResults (cache permanente) y devuelve el objeto combinado.
+// Carga resultados forzados y vetos del admin desde Firestore.
+// Actualiza S.adminResults y S.vetoed (ambos permanentes).
 async function fetchAdminResultsFromFirestore(){
   try{
     const { collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const leagueCodes = Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
-    const freshAdminResults = {};
+    const freshResults = {};
+    const freshVetoed = {};
     await Promise.all(leagueCodes.map(async code=>{
       try{
         const snaps = await getDocs(collection(fbDb(), 'leagues', code, 'results'));
-        snaps.forEach(d=>{ freshAdminResults[d.id] = d.data(); });
+        snaps.forEach(d=>{
+          const data = d.data();
+          if(data.vetoed === true) freshVetoed[d.id] = true;
+          else freshResults[d.id] = data;
+        });
       }catch(e){ /* sin permisos o vacio */ }
     }));
-    // Merge: conservar cualquier resultado que ya teníamos (por si una liga ya no está cargada)
-    S.adminResults = { ...(S.adminResults||{}), ...freshAdminResults };
+    // Merge conservando cache (por si una liga ya no está cargada)
+    // Pero si algo estaba como resultado y ahora está vetado, quitar del adminResults
+    const merged = { ...(S.adminResults||{}), ...freshResults };
+    Object.keys(freshVetoed).forEach(mid => delete merged[mid]);
+    S.adminResults = merged;
+    S.vetoed = { ...(S.vetoed||{}), ...freshVetoed };
     localStorage.setItem('wf26_admin_results', JSON.stringify(S.adminResults));
+    localStorage.setItem('wf26_vetoed', JSON.stringify(S.vetoed));
     return S.adminResults;
   }catch(e){
     console.error('fetchAdminResultsFromFirestore error', e);
-    // Si falla Firestore, devolver lo que tengamos en cache
     return S.adminResults || {};
   }
 }
@@ -330,7 +342,10 @@ async function startAutoUpdateResults(){
   if(first){
     S.schedule = first.schedule || {};
     // adminResults ya actualizó S.adminResults internamente
-    S.results = { ...(first.results||{}), ...(S.adminResults||{}) };
+    // Filtrar de la API los partidos vetados antes del merge inicial
+    const initApiResults = first.results || {};
+    Object.keys(S.vetoed||{}).forEach(mid => delete initApiResults[mid]);
+    S.results = { ...initApiResults, ...(S.adminResults||{}) };
     save();
     renderPredTab();
     renderRanking();
@@ -342,7 +357,10 @@ async function startAutoUpdateResults(){
     if(!next) return;
     // Refrescar admin results desde Firestore (en background); si falla, S.adminResults ya tiene el cache
     fetchAdminResultsFromFirestore().catch(()=>{});
-    const nextResults = { ...(next.results||{}), ...(S.adminResults||{}) };
+    // Filtrar de la API los partidos vetados por admin antes del merge
+    const apiResults = next.results || {};
+    Object.keys(S.vetoed||{}).forEach(mid => delete apiResults[mid]);
+    const nextResults = { ...apiResults, ...(S.adminResults||{}) };
     const nextSchedule = next.schedule || {};
     const prev = S.results || {};
     const changed = Object.keys(nextResults).some(mid=>{
@@ -810,6 +828,11 @@ async function adminSetResult(mid){
     S.results[mid]=rg;
     S.adminResults = S.adminResults || {};
     S.adminResults[mid] = rg;
+    // Si había un veto previo, quitarlo (el admin está forzando un resultado nuevo)
+    if(S.vetoed && S.vetoed[mid]) {
+      delete S.vetoed[mid];
+      localStorage.setItem('wf26_vetoed', JSON.stringify(S.vetoed));
+    }
     localStorage.setItem('wf26_admin_results', JSON.stringify(S.adminResults));
     Object.keys(S.predictions[S.currentLeague]||{}).forEach(uid=>{
       if(uid !== S.currentUser) delete S.predictions[S.currentLeague][uid];
@@ -832,10 +855,10 @@ async function adminClearResult(mid){
   if(!S.currentLeague) return;
   if(!confirm('¿Borrar el resultado de este partido? Los puntos calculados se perderán.')) return;
   try{
-    const { doc, deleteDoc, collection, getDocs, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const { doc, setDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
 
-    // 1) Borrar resultado de Firestore
-    await deleteDoc(doc(fbDb(), 'leagues', S.currentLeague, 'results', mid));
+    // 1) Marcar como vetado en Firestore (veto = la API no puede sobreescribir este partido)
+    await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'results', mid), { vetoed: true }, { merge: false });
 
     // 2) Limpiar el campo points de ese partido en todas las predicciones
     const predSnaps = await getDocs(collection(fbDb(), 'leagues', S.currentLeague, 'predictions'));
@@ -843,17 +866,19 @@ async function adminClearResult(mid){
       const uid = dSnap.id;
       const data = dSnap.data() || {};
       if(!data[mid]) return;
-      const updated = { ...data, [mid]: { g1: data[mid].g1??'', g2: data[mid].g2??'' } };
-      // Recalcular _totalPts sin este partido
+      const { points: _removed, ...predWithoutPts } = data[mid];
+      const updated = { ...data, [mid]: predWithoutPts };
       updated._totalPts = Object.entries(updated).reduce((acc,[k,v])=> k==='_totalPts'?acc : acc+(v?.points||0), 0);
       await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid), updated, { merge: false });
     }));
 
-    // 3) Limpiar cache local
+    // 3) Actualizar cache local
     delete S.results[mid];
     if(S.adminResults) delete S.adminResults[mid];
+    S.vetoed = S.vetoed || {};
+    S.vetoed[mid] = true;
     localStorage.setItem('wf26_admin_results', JSON.stringify(S.adminResults||{}));
-    // Limpiar cache de otros usuarios para forzar recarga
+    localStorage.setItem('wf26_vetoed', JSON.stringify(S.vetoed));
     Object.keys(S.predictions[S.currentLeague]||{}).forEach(uid=>{
       if(uid !== S.currentUser) delete S.predictions[S.currentLeague][uid];
     });
