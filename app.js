@@ -116,12 +116,12 @@ async function refreshUserLeagues(){
 }
 
 function save(){
+  // En modo completo: solo dejamos en localStorage lo “cacheable” (usuarios/ligas).
+  // Predicciones y resultados van a Firestore.
   localStorage.setItem('wf26_users',JSON.stringify(S.users));
   localStorage.setItem('wf26_leagues',JSON.stringify(S.leagues));
-  localStorage.setItem('wf26_preds',JSON.stringify(S.predictions));
-  localStorage.setItem('wf26_results',JSON.stringify(S.results));
-  localStorage.setItem('wf26_ko',JSON.stringify(S.knockoutMatches));
 }
+
 
 // Roles
 const getCurrentUserEmail = () => {
@@ -292,6 +292,9 @@ async function fetchResultsFromSheet(){
 }
 
 async function startAutoUpdateResults(){
+  // NOTA: en modo completo, los resultados del endpoint se escriben también a Firestore
+  // para que predicciones/ranking dependan de un estado compartido.
+
   try{
     console.log('[wf26] startAutoUpdateResults');
   }catch(e){}
@@ -436,7 +439,9 @@ async function createLeague(){
   }
 }
 function copyCode(code){ navigator.clipboard.writeText(code).then(()=>{document.getElementById('copy-ok').textContent='¡Copiado!';}).catch(()=>{document.getElementById('copy-ok').textContent='Código: '+code;}); }
-async function joinLeague(){
+async function joinLeague(){ 
+
+
   const code=document.getElementById('jcode-inp').value.trim().toUpperCase();
   const err=document.getElementById('join-err');
   if(!code){err.textContent='Introduce el código';return;}
@@ -476,13 +481,27 @@ function closeModalBg(e){ if(e.target===document.getElementById('modal-overlay')
 
 function renderLeagues(){
   const list=document.getElementById('leagues-list');
-  // Usamos S.leagues (cargadas desde Firestore) en vez de users/{uid}.leagues,
-  // porque la UI depende de esto para mostrar “Mis ligas”.
-  const ul = Object.keys(S.leagues || {}).filter(c => S.leagues[c]);
-  const valid = ul;
-  if(!valid.length){ list.innerHTML=`<div class="empty-state"><div class="ei">🏆</div><p>Aún no tienes ligas.<br>¡Crea una o únete!</p></div>`; return; }
-  list.innerHTML=valid.map(code=>{
-    const l=S.leagues[code]; const pts=getUserPts(S.currentUser,code,'total');
+  if(!list) return;
+
+  const leaguesCodes = Object.keys(S.leagues || {}).filter(c => S.leagues[c]);
+
+  // Mantener coherencia con el requisito: si el usuario ya estaba en ligas,
+  // NO deben desaparecer tras recargar.
+  // Si S.leagues aún no terminó de refrescar, mostramos lo que ya exista en cache.
+  if(!leaguesCodes.length){
+    const cached = JSON.parse(localStorage.getItem('wf26_leagues')||'{}');
+    const cachedCodes = Object.keys(cached||{}).filter(c => cached[c]);
+    if(cachedCodes.length){
+      S.leagues = cached;
+      return renderLeagues();
+    }
+    list.innerHTML=`<div class="empty-state"><div class="ei">🏆</div><p>Aún no tienes ligas.<br>¡Crea una o únete!</p></div>`; 
+    return;
+  }
+
+  list.innerHTML=leaguesCodes.map(code=>{
+    const l=S.leagues[code];
+    const pts=getUserPts(S.currentUser,code,'total');
     let av=l.avatar?`<img src="${l.avatar}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`:`<span style="font-size:18px">🏆</span>`;
     const isSelected=S.currentLeague===code;
     return `<div class="league-card${isSelected?' selected':''}" onclick="selectLeague('${code}')">
@@ -492,6 +511,7 @@ function renderLeagues(){
     </div>`;
   }).join('');
 }
+
 
 function selectLeague(code){
   S.currentLeague=code;
@@ -664,56 +684,100 @@ function toggleRivals(mid){
   el.classList.toggle('open');
 }
 
-function savePred(mid){
+async function savePred(mid){
   if(!S.currentLeague) return;
+
   clearTimeout(saveTimers[mid]);
-  saveTimers[mid]=setTimeout(()=>{
+  saveTimers[mid]=setTimeout(async ()=>{
     const g1=document.getElementById('pred-'+mid+'-1')?.value||'';
     const g2=document.getElementById('pred-'+mid+'-2')?.value||'';
-    if(!S.predictions[S.currentLeague]) S.predictions[S.currentLeague]={};
-    if(!S.predictions[S.currentLeague][S.currentUser]) S.predictions[S.currentLeague][S.currentUser]={};
-    S.predictions[S.currentLeague][S.currentUser][mid]={g1,g2};
-    save();
-    const ind=document.getElementById('save-ind');
-    if(ind){ind.textContent='✅ Guardado';setTimeout(()=>{if(ind)ind.textContent='';},1800);}
+
+    try{
+      const { doc, setDoc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+      // leemos el doc para actualizar el matchId manteniendo otros partidos
+      const predRef = doc(fbDb(), 'leagues', S.currentLeague, 'predictions', S.currentUser);
+      const snap = await getDoc(predRef);
+      const existing = snap.exists()? (snap.data()||{}) : {};
+      const next = { ...existing, [mid]: { g1, g2 } };
+      await setDoc(predRef, next, { merge: false });
+
+      const ind=document.getElementById('save-ind');
+      if(ind){ind.textContent='✅ Guardado';setTimeout(()=>{if(ind)ind.textContent='';},1800);}
+
+      // refrescar en memoria para pintar inmediatamente
+      if(!S.predictions[S.currentLeague]) S.predictions[S.currentLeague]={};
+      S.predictions[S.currentLeague][S.currentUser] = next;
+    }catch(e){
+      console.error('savePred error', e);
+    }
   },700);
 }
 
-function adminSetResult(mid){
+
+async function adminSetResult(mid){
   const g1=document.getElementById('adm-'+mid+'-1')?.value;
   const g2=document.getElementById('adm-'+mid+'-2')?.value;
   if(g1===''||g2==='') return;
-  S.results[mid]={g1:parseInt(g1),g2:parseInt(g2)};
-  save();
-  if(S.currentLeague){
-    const league=S.leagues[S.currentLeague];
-    league.members.forEach(mb=>{
-      const preds=((S.predictions[S.currentLeague]||{})[mb])||{};
-      const p=preds[mid]||{g1:'',g2:''};
-      const pts=calcPoints(S.results[mid],p);
-      if(!S.predictions[S.currentLeague]) S.predictions[S.currentLeague]={};
-      if(!S.predictions[S.currentLeague][mb]) S.predictions[S.currentLeague][mb]={};
-      S.predictions[S.currentLeague][mb][mid]={...p, points: pts};
-    });
-    save();
+  if(!S.currentLeague) return;
+
+  try{
+    const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const rg = { g1: parseInt(g1), g2: parseInt(g2) };
+    // Guardar resultado por partido
+    await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'results', mid), rg, { merge: true });
+
+    // Recalcular puntos de TODOS los miembros en predictions/{uid}
+    const { collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const predCol = collection(fbDb(), 'leagues', S.currentLeague, 'predictions');
+    const predSnaps = await getDocs(predCol);
+
+    await Promise.all(predSnaps.docs.map(async (dSnap)=>{
+      const uid = dSnap.id;
+      const data = dSnap.data()||{};
+      const p = data[mid] || { g1:'', g2:'' };
+      const pts = calcPoints(rg, p);
+      const next = { ...data, [mid]: { ...p, points: pts } };
+      await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid), next, { merge:false });
+    }));
+
+    // Refrescar en memoria para pintar
+    S.results[mid] = rg;
+    renderPhaseBody();
+  }catch(e){
+    console.error('adminSetResult error', e);
   }
-  renderPhaseBody();
 }
 
-function adminRecalc(mid){
-  if(!S.results[mid]||!S.currentLeague) return;
-  const league=S.leagues[S.currentLeague];
-  league.members.forEach(mb=>{
-    const preds=((S.predictions[S.currentLeague]||{})[mb])||{};
-    const p=preds[mid]||{g1:'',g2:''};
-    const pts=calcPoints(S.results[mid],p);
-    if(!S.predictions[S.currentLeague][mb]) S.predictions[S.currentLeague][mb]={};
-    S.predictions[S.currentLeague][mb][mid]={...p,points:pts};
-  });
-  save(); renderPhaseBody();
-  const ind=document.getElementById('save-ind');
-  if(ind){ind.textContent='✅ Puntos recalculados';setTimeout(()=>{if(ind)ind.textContent='';},2000);}
+
+async function adminRecalc(mid){
+  if(!S.currentLeague) return;
+  try{
+    const { doc, getDoc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const resSnap = await getDoc(doc(fbDb(), 'leagues', S.currentLeague, 'results', mid));
+    if(!resSnap.exists()) return;
+    const rg = resSnap.data()||{};
+
+    const { collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const predCol = collection(fbDb(), 'leagues', S.currentLeague, 'predictions');
+    const predSnaps = await getDocs(predCol);
+
+    await Promise.all(predSnaps.docs.map(async (dSnap)=>{
+      const uid = dSnap.id;
+      const data = dSnap.data()||{};
+      const p = data[mid] || { g1:'', g2:'' };
+      const pts = calcPoints(rg, p);
+      const next = { ...data, [mid]: { ...p, points: pts } };
+      await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid), next, { merge:false });
+    }));
+
+    renderPhaseBody();
+    const ind=document.getElementById('save-ind');
+    if(ind){ind.textContent='✅ Puntos recalculados';setTimeout(()=>{if(ind)ind.textContent='';},2000);}
+  }catch(e){
+    console.error('adminRecalc error', e);
+  }
 }
+
 
 function calcPoints(res, pred){
   if(!res) return 0;
@@ -791,4 +855,5 @@ function fmtTime(dt){ return dt.toLocaleTimeString('es-ES',{hour:'2-digit',minut
 
 // Init
 if(S.currentUser && S.users[S.currentUser]) showMain();
+
 
