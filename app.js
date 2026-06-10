@@ -98,8 +98,7 @@ let S = {
   currentUser: localStorage.getItem('wf26_cu')||null,
   currentPhase: 0,
   currentGroup: 'A',
-  currentLeague: null,
-  currentRankPhase: 'total'
+  currentLeague: null
 };
 
 // Si cambias de usuario sin recargar, fuerza recargar estado del nuevo UID
@@ -493,7 +492,7 @@ function renderLeagues(){
 
   list.innerHTML=leaguesCodes.map(code=>{
     const l=S.leagues[code];
-    const pts=getUserPts(S.currentUser,code,'total');
+    const pts=getUserPts(S.currentUser,code);
     let av=l.avatar?`<img src="${l.avatar}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`:`<span style="font-size:18px">🏆</span>`;
     const isSelected=S.currentLeague===code;
     const isCreator = String(l.creatorUid) === String(S.currentUser);
@@ -588,7 +587,7 @@ async function leaveLeague(code, mode){
 // ===== PREDICCIONES =====
 function pickLeagueForPreds(code){ S.currentLeague=code; closeModal(); renderPredTab(); }
 
-function renderPredTab(){
+async function renderPredTab(){
   const inner=document.getElementById('pred-inner');
   if(!inner){ console.error('renderPredTab: pred-inner missing'); return; }
   const ul=Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
@@ -604,6 +603,11 @@ function renderPredTab(){
     return;
   }
   const league=S.leagues[S.currentLeague];
+
+  // Cargar predicciones de todos los miembros para poder mostrar preds rivales
+  const memberUids = [...new Set([...(league.members||[]), S.currentUser])];
+  await ensureLeaguePredictionsLoaded(S.currentLeague, memberUids);
+
   inner.innerHTML=`<div style="padding:0 0 0">
     <div style="padding:10px 14px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
       <span style="font-size:11px;color:var(--text2)">Liga:</span>
@@ -870,32 +874,42 @@ function calcPoints(res, pred){
 }
 
 // ===== RANKING =====
-function getUserPts(user, leagueCode, phase){
-  if(!S.predictions[leagueCode]||!S.predictions[leagueCode][user]) return 0;
-  const data = S.predictions[leagueCode][user];
-  // Si hay un _totalPts precalculado y no es el usuario actual (no tenemos datos completos), usarlo
-  if(user !== S.currentUser && data._totalPts !== undefined) return data._totalPts;
-  return Object.entries(data).reduce((acc,[k,p])=> k==='_totalPts' ? acc : acc+(p?.points||0), 0);
+function getUserPts(user, leagueCode){
+  const data = S.predictions?.[leagueCode]?.[user];
+  if(!data) return 0;
+  return Object.entries(data).reduce((acc, [mid, p]) => {
+    if(mid === '_totalPts') return acc;
+    const res = S.results?.[mid];
+    if(!res) return acc;
+    return acc + calcPoints(res, p);
+  }, 0);
 }
 
 // Carga desde Firestore las predicciones de todos los miembros de una liga.
-// Para el usuario actual usa la cache (ya se cargó al login).
-// Para el resto SIEMPRE recarga desde Firestore para tener puntos frescos.
+// Usa getDocs sobre la subcolección completa para que cualquier miembro pueda leer todo
+// (las reglas de Firestore deben permitir leer /leagues/{code}/predictions a miembros de esa liga).
 async function ensureLeaguePredictionsLoaded(leagueCode, memberUids){
   try{
-    const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const { collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     if(!S.predictions[leagueCode]) S.predictions[leagueCode] = {};
-    // Solo saltamos la carga del usuario actual (sus preds ya están en cache y son las más fiables)
-    const need = (memberUids||[]).filter(uid => uid && uid !== S.currentUser);
-    await Promise.all(need.map(async uid => {
-      try{
-        const snap = await getDoc(doc(fbDb(), 'leagues', leagueCode, 'predictions', uid));
-        S.predictions[leagueCode][uid] = snap.exists() ? (snap.data()||{}) : {};
-      }catch(e){
-        // Sin permisos para leer este uid (normal para usuarios no-admin): dejar lo que haya
-      }
-    }));
-  }catch(e){ console.error('ensureLeaguePredictionsLoaded error', e); }
+    const snaps = await getDocs(collection(fbDb(), 'leagues', leagueCode, 'predictions'));
+    snaps.forEach(d=>{
+      S.predictions[leagueCode][d.id] = d.data() || {};
+    });
+  }catch(e){
+    console.error('ensureLeaguePredictionsLoaded error', leagueCode, e);
+    // Fallback: intentar cargar uid por uid (por si las reglas son más restrictivas)
+    try{
+      const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+      if(!S.predictions[leagueCode]) S.predictions[leagueCode] = {};
+      await Promise.all((memberUids||[]).map(async uid => {
+        try{
+          const snap = await getDoc(doc(fbDb(), 'leagues', leagueCode, 'predictions', uid));
+          S.predictions[leagueCode][uid] = snap.exists() ? (snap.data()||{}) : {};
+        }catch(e2){ /* sin permisos para este uid */ }
+      }));
+    }catch(e2){ console.error('ensureLeaguePredictionsLoaded fallback error', e2); }
+  }
 }
 
 async function ensureUsersLoaded(uids){
@@ -919,11 +933,6 @@ async function renderRanking(){
   const listEl=document.getElementById('ranking-list');
   const filtersEl=document.getElementById('ranking-filters');
   if(!listEl||!filtersEl) return;
-  const myLeagues=Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
-  filtersEl.innerHTML=['Total',...PHASES].map((f,i)=>{
-    const fv=i===0?'total':i-1;
-    return `<div class="filter-btn${S.currentRankPhase===fv?' active':''}" onclick="setRankPhase(${i===0?"'total'":i-1})">${f}</div>`;
-  }).join('');
 
   // desplegable: liga seleccionada
   const eligibleCodes = Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
@@ -931,27 +940,25 @@ async function renderRanking(){
 
   // si no hay selección válida, ocultar tabla
   if(!selected){
+    filtersEl.innerHTML='';
     listEl.innerHTML=`<div class="empty-state"><div class="ei">📊</div><p>Únete a una liga para ver la tabla</p></div>`;
     return;
   }
 
+  // Si no hay selección guardada, dejarla en un valor válido
+  if(!S.currentLeague || !S.leagues?.[S.currentLeague]){
+    S.currentLeague = selected;
+  }
+
   filtersEl.innerHTML = `
-    <div style="display:flex;flex-direction:column;gap:8px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-        <div style="font-size:12px;color:var(--text2);white-space:nowrap;">Liga:</div>
-        <select id="ranking-league-select" onchange="setRankingLeague(this.value)" style="flex:1;padding:8px 10px;border-radius:10px;background:var(--bg3);color:var(--text);border:1px solid var(--border);">
-          ${eligibleCodes.map(code=>{
-            const l=S.leagues[code];
-            return `<option value="${code}" ${code===selected?'selected':''}>${l?.name||code}</option>`;
-          }).join('')}
-        </select>
-      </div>
-      <div class="ranking-phase-filters" style="display:flex;gap:10px;flex-wrap:wrap;">
-        ${['Total',...PHASES].map((f,i)=>{
-          const fv=i===0?'total':i-1;
-          return `<div class="filter-btn${S.currentRankPhase===fv?' active':''}" onclick="setRankPhase(${i===0?"'total'":i-1})">${f}</div>`;
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 0;">
+      <div style="font-size:12px;color:var(--text2);white-space:nowrap;">Liga:</div>
+      <select id="ranking-league-select" onchange="setRankingLeague(this.value)" style="flex:1;padding:8px 10px;border-radius:10px;background:var(--bg3);color:var(--text);border:1px solid var(--border);">
+        ${eligibleCodes.map(code=>{
+          const l=S.leagues[code];
+          return `<option value="${code}" ${code===selected?'selected':''}>${l?.name||code}</option>`;
         }).join('')}
-      </div>
+      </select>
     </div>
   `;
 
@@ -960,38 +967,20 @@ async function renderRanking(){
     renderRanking().catch(()=>{});
   }
 
-  // Si no hay selección guardada, nos aseguramos de dejarla en un valor válido
-  if(!S.currentLeague || !S.leagues?.[S.currentLeague]){
-    S.currentLeague = selected;
-  }
-
-  if(false){
-
-    listEl.innerHTML=`<div class="empty-state"><div class="ei">📊</div><p>Únete a una liga para ver la tabla</p></div>`;
-    return;
-  }
   const selectedLeague = S.leagues[selected];
+  const memberUids = [...new Set([...(selectedLeague?.members||[]), S.currentUser])];
+  await ensureUsersLoaded(memberUids);
+  await ensureLeaguePredictionsLoaded(selected, memberUids);
 
-  const memberUids=[];
-  (selectedLeague?.members||[]).forEach(uid=>memberUids.push(uid));
-  memberUids.push(S.currentUser);
-  const uniqueUids = [...new Set(memberUids)];
-  await ensureUsersLoaded(uniqueUids);
-
-  // Cargar predicciones de todos los miembros desde Firestore si no están en cache
-  await ensureLeaguePredictionsLoaded(selected, uniqueUids);
-
-  // Render SOLO la liga seleccionada
-  let html='';
-  const l=selectedLeague;
-  const scores=(l.members||[]).map(m=>({
+  const scores=(selectedLeague.members||[]).map(m=>({
     uid:m,
     name:getDisplayName(m),
-    pts:getUserPts(m, selected, S.currentRankPhase),
+    pts:getUserPts(m, selected),
     avatar:S.users?.[m]?.avatar
   }));
   scores.sort((a,b)=>b.pts-a.pts);
-  html+=`<div class="rank-league-label">${l.name}</div>`;
+
+  let html=`<div class="rank-league-label">${selectedLeague.name}</div>`;
   scores.forEach((s,i)=>{
     const posC=i===0?'gold':i===1?'silver':i===2?'bronze':'';
     const posI=i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1;
@@ -1001,8 +990,6 @@ async function renderRanking(){
   });
   listEl.innerHTML=html;
 }
-
-function setRankPhase(f){ S.currentRankPhase=f; renderRanking().catch(()=>{}); }
 
 // ===== PREDICCIONES (Firestore -> cache local) =====
 async function loadPredictionsFromFirestoreForCurrentUser(){
