@@ -93,6 +93,8 @@ let S = {
   // cache resultados/schedule compartidos entre usuarios
   results: JSON.parse(localStorage.getItem('wf26_results')||'{}'),
   schedule: JSON.parse(localStorage.getItem('wf26_sched')||'{}'),
+  // resultados forzados por admin: cache permanente, nunca machacado por polling
+  adminResults: JSON.parse(localStorage.getItem('wf26_admin_results')||'{}'),
   currentUser: localStorage.getItem('wf26_cu')||null,
   currentPhase: 0,
   currentGroup: 'A',
@@ -148,6 +150,7 @@ function save(){
   // resultados/schedule compartidos (no dependen del usuario)
   localStorage.setItem('wf26_results',JSON.stringify(S.results||{}));
   localStorage.setItem('wf26_sched',JSON.stringify(S.schedule||{}));
+  localStorage.setItem('wf26_admin_results',JSON.stringify(S.adminResults||{}));
 }
 
 const getCurrentUserEmail = () => {
@@ -295,22 +298,27 @@ async function fetchResultsFromSheet(){
   }
 }
 
-// Carga todos los resultados forzados por el admin desde Firestore (todas las ligas del usuario)
+// Carga todos los resultados forzados por el admin desde Firestore (todas las ligas del usuario).
+// Actualiza S.adminResults (cache permanente) y devuelve el objeto combinado.
 async function fetchAdminResultsFromFirestore(){
   try{
     const { collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const leagueCodes = Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
-    const adminResults = {};
+    const freshAdminResults = {};
     await Promise.all(leagueCodes.map(async code=>{
       try{
         const snaps = await getDocs(collection(fbDb(), 'leagues', code, 'results'));
-        snaps.forEach(d=>{ adminResults[d.id] = d.data(); });
+        snaps.forEach(d=>{ freshAdminResults[d.id] = d.data(); });
       }catch(e){ /* sin permisos o vacio */ }
     }));
-    return adminResults;
+    // Merge: conservar cualquier resultado que ya teníamos (por si una liga ya no está cargada)
+    S.adminResults = { ...(S.adminResults||{}), ...freshAdminResults };
+    localStorage.setItem('wf26_admin_results', JSON.stringify(S.adminResults));
+    return S.adminResults;
   }catch(e){
     console.error('fetchAdminResultsFromFirestore error', e);
-    return {};
+    // Si falla Firestore, devolver lo que tengamos en cache
+    return S.adminResults || {};
   }
 }
 
@@ -318,10 +326,12 @@ async function startAutoUpdateResults(){
   console.log('[wf26] startAutoUpdateResults');
   if(autoResultsTimer) clearInterval(autoResultsTimer);
 
+  // Carga inicial: API + Firestore en paralelo
   const [first, adminResults] = await Promise.all([fetchResultsFromSheet(), fetchAdminResultsFromFirestore()]);
   if(first){
     S.schedule = first.schedule || {};
-    S.results = { ...(first.results||{}), ...adminResults };
+    // adminResults ya actualizó S.adminResults internamente
+    S.results = { ...(first.results||{}), ...(S.adminResults||{}) };
     save();
     renderPredTab();
     renderRanking();
@@ -329,15 +339,17 @@ async function startAutoUpdateResults(){
   }
 
   autoResultsTimer = setInterval(async ()=>{
-    const [next, adminRes] = await Promise.all([fetchResultsFromSheet(), fetchAdminResultsFromFirestore()]);
+    const next = await fetchResultsFromSheet();
     if(!next) return;
-    const nextResults = { ...(next.results||{}), ...adminRes };
+    // Refrescar admin results desde Firestore (en background); si falla, S.adminResults ya tiene el cache
+    fetchAdminResultsFromFirestore().catch(()=>{});
+    const nextResults = { ...(next.results||{}), ...(S.adminResults||{}) };
     const nextSchedule = next.schedule || {};
     const prev = S.results || {};
     const changed = Object.keys(nextResults).some(mid=>{
       const a=nextResults[mid]||{}, b=prev[mid]||{};
       return Number(a.g1)!==Number(b.g1)||Number(a.g2)!==Number(b.g2);
-    }) || Object.keys(prev).length !== Object.keys(nextResults).length;
+    }) || Object.keys(nextResults).length !== Object.keys(prev).length;
     const prevSched = S.schedule || {};
     const schedChanged = Object.keys(nextSchedule).some(mid=>{
       const a=nextSchedule[mid]||{}, b=prevSched[mid]||{};
@@ -792,6 +804,9 @@ async function adminSetResult(mid){
 
     // 3) Limpiar cache de otros usuarios y redibujar
     S.results[mid]=rg;
+    S.adminResults = S.adminResults || {};
+    S.adminResults[mid] = rg;
+    localStorage.setItem('wf26_admin_results', JSON.stringify(S.adminResults));
     Object.keys(S.predictions[S.currentLeague]||{}).forEach(uid=>{
       if(uid !== S.currentUser) delete S.predictions[S.currentLeague][uid];
     });
