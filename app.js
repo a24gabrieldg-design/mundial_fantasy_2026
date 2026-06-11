@@ -362,6 +362,405 @@ async function startAutoUpdateResults(){
   if(autoResultsTimer) clearInterval(autoResultsTimer);
 
   // Carga inicial: API + Firestore en paralelo
+  const [first, adminResults] = await Promise.all([fetchResultsFromSheet(), fetchAdminResultsFromFirestore()]);
+  // Cargar cruces KO por separado para que un fallo no rompa el login
+  loadKOMatchesFromFirestore().catch(e=>console.error('koMatches load error', e));
+  if(first){
+    S.schedule = first.schedule || {};
+    // adminResults ya actualizó S.adminResults internamente
+    // Filtrar de la API los partidos vetados antes del merge inicial
+    const initApiResults = first.results || {};
+    Object.keys(S.vetoed||{}).forEach(mid => delete initApiResults[mid]);
+    S.results = { ...initApiResults, ...(S.adminResults||{}) };
+    save();
+    renderPredTab();
+    renderRanking();
+    renderPhaseBody();
+  }
+
+  autoResultsTimer = setInterval(async ()=>{
+    const next = await fetchResultsFromSheet();
+    if(!next) return;
+    // Refrescar admin results desde Firestore (en background); si falla, S.adminResults ya tiene el cache
+    fetchAdminResultsFromFirestore().catch(()=>{});
+    // Filtrar de la API los partidos vetados por admin antes del merge
+    const apiResults = next.results || {};
+    Object.keys(S.vetoed||{}).forEach(mid => delete apiResults[mid]);
+    const nextResults = { ...apiResults, ...(S.adminResults||{}) };
+    const nextSchedule = next.schedule || {};
+    const prev = S.results || {};
+    const changed = Object.keys(nextResults).some(mid=>{
+      const a=nextResults[mid]||{}, b=prev[mid]||{};
+      return Number(a.g1)!==Number(b.g1)||Number(a.g2)!==Number(b.g2);
+    }) || Object.keys(nextResults).length !== Object.keys(prev).length;
+    const prevSched = S.schedule || {};
+    const schedChanged = Object.keys(nextSchedule).some(mid=>{
+      const a=nextSchedule[mid]||{}, b=prevSched[mid]||{};
+      return a.date!==b.date||a.time!==b.time;
+    }) || Object.keys(prevSched).length !== Object.keys(nextSchedule).length;
+    if(!changed && !schedChanged) return;
+    S.results = nextResults;
+    S.schedule = nextSchedule;
+    Object.keys(S.predictions||{}).forEach(leagueCode=>{
+      Object.keys(S.predictions[leagueCode]||{}).forEach(uid=>{
+        if(uid !== S.currentUser) delete S.predictions[leagueCode][uid];
+      });
+    });
+    save();
+    renderPhaseBody();
+    renderPredTab();
+    renderRanking();
+  }, 60000);
+}
+
+function showMain(){
+  document.getElementById('auth-screen').classList.remove('active');
+  document.getElementById('main-screen').classList.add('active');
+  document.getElementById('top-bar-right').innerHTML = isTotalAdmin()?'<span class="admin-badge">ADMIN</span>':'';
+  goTab('ligas',0);
+  renderProfileInfo();
+  startAutoUpdateResults();
+}
+
+// ===== NAV =====
+function goTab(name,idx){
+  document.querySelectorAll('.tab-page').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  document.getElementById('nav-'+idx).classList.add('active');
+  const titles=['Mis Ligas','Predicciones','Clasificación','Información'];
+  document.getElementById('top-bar-title').textContent=titles[idx];
+  if(name==='ligas') renderLeagues();
+  if(name==='preds') renderPredTab();
+  if(name==='tabla') renderRanking();
+  if(name==='info') re// Lista plana de todos los equipos del torneo (para selects del admin en KO)
+const ALL_TEAMS = Object.values(GROUP_TEAMS).flat();
+
+// Generate group matches
+// Fechas y horas en hora España peninsular (CEST, UTC+2)
+function makeGroupMatches(){
+  const base = {
+    //           J1-P1                  J1-P2                  J2-P1                  J2-P2                  J3-P1                  J3-P2
+    A:[['2026-06-11','21:00'],['2026-06-12','04:00'],['2026-06-18','18:00'],['2026-06-19','03:00'],['2026-06-25','03:00'],['2026-06-25','03:00']],
+    B:[['2026-06-12','21:00'],['2026-06-13','21:00'],['2026-06-18','21:00'],['2026-06-19','00:00'],['2026-06-24','21:00'],['2026-06-24','21:00']],
+    C:[['2026-06-14','00:00'],['2026-06-14','03:00'],['2026-06-20','00:00'],['2026-06-20','03:00'],['2026-06-25','00:00'],['2026-06-25','00:00']],
+    D:[['2026-06-13','03:00'],['2026-06-13','06:00'],['2026-06-19','21:00'],['2026-06-19','06:00'],['2026-06-26','04:00'],['2026-06-26','04:00']],
+    E:[['2026-06-14','19:00'],['2026-06-15','01:00'],['2026-06-21','00:00'],['2026-06-21','02:00'],['2026-06-26','00:00'],['2026-06-26','00:00']],
+    F:[['2026-06-15','00:00'],['2026-06-15','04:00'],['2026-06-20','19:00'],['2026-06-20','06:00'],['2026-06-26','01:00'],['2026-06-26','01:00']],
+    G:[['2026-06-15','21:00'],['2026-06-16','03:00'],['2026-06-22','01:00'],['2026-06-22','03:00'],['2026-06-27','05:00'],['2026-06-27','05:00']],
+    H:[['2026-06-15','18:00'],['2026-06-16','00:00'],['2026-06-21','18:00'],['2026-06-22','00:00'],['2026-06-27','02:00'],['2026-06-27','02:00']],
+    I:[['2026-06-16','21:00'],['2026-06-17','00:00'],['2026-06-22','23:00'],['2026-06-23','02:00'],['2026-06-26','21:00'],['2026-06-26','21:00']],
+    J:[['2026-06-17','03:00'],['2026-06-17','06:00'],['2026-06-22','19:00'],['2026-06-23','05:00'],['2026-06-28','04:00'],['2026-06-28','04:00']],
+    K:[['2026-06-17','19:00'],['2026-06-18','04:00'],['2026-06-23','19:00'],['2026-06-24','04:00'],['2026-06-28','01:30'],['2026-06-28','01:30']],
+    L:[['2026-06-17','22:00'],['2026-06-18','01:00'],['2026-06-23','22:00'],['2026-06-24','01:00'],['2026-06-27','23:00'],['2026-06-27','23:00']]
+  };
+  const pairs = [[0,1],[2,3],[0,2],[1,3],[3,0],[1,2]];
+  const res = {};
+  GROUPS.forEach(g=>{
+    const ts = GROUP_TEAMS[g];
+    res[g] = pairs.map((p,i)=>({
+      id:`${g}${i+1}`,
+      t1:ts[p[0]].f, n1:ts[p[0]].n,
+      t2:ts[p[1]].f, n2:ts[p[1]].n,
+      date:base[g][i][0], time:base[g][i][1]
+    }));
+  });
+  return res;
+}
+
+const MATCHES_GROUP = makeGroupMatches();
+
+const KNOCKOUT_TEMPLATES = {
+  1: Array.from({length:16},(_,i)=>({id:`R16_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-06-29',time:'18:00',locked:true})),
+  2: Array.from({length:8},(_,i)=>({id:`QF_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-04',time:'18:00',locked:true})),
+  3: Array.from({length:4},(_,i)=>({id:`SF_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-14',time:'18:00',locked:true})),
+  4: [{id:'FIN_1',n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-19',time:'18:00',locked:true}]
+};
+
+function storageKey_(uid, key){
+  return uid ? `wf26_${key}__${uid}` : `wf26_${key}__anon`;
+}
+
+function loadStateForUser_(uid){
+  return {
+    users: JSON.parse(localStorage.getItem(storageKey_(uid,'users'))||'{}'),
+    leagues: JSON.parse(localStorage.getItem(storageKey_(uid,'leagues'))||'{}'),
+    predictions: JSON.parse(localStorage.getItem(storageKey_(uid,'preds'))||'{}'),
+    knockoutMatches: JSON.parse(localStorage.getItem(storageKey_(uid,'ko'))||'{}'),
+  };
+}
+
+let S = {
+  ...loadStateForUser_(localStorage.getItem('wf26_cu')||null),
+  // cache resultados/schedule compartidos entre usuarios
+  results: JSON.parse(localStorage.getItem('wf26_results')||'{}'),
+  schedule: JSON.parse(localStorage.getItem('wf26_sched')||'{}'),
+  // resultados forzados por admin: cache permanente, nunca machacado por polling
+  adminResults: JSON.parse(localStorage.getItem('wf26_admin_results')||'{}'),
+  // partidos vetados por admin (borrados manualmente): la API no puede sobreescribirlos
+  vetoed: JSON.parse(localStorage.getItem('wf26_vetoed')||'{}'),
+  currentUser: localStorage.getItem('wf26_cu')||null,
+  currentPhase: 0,
+  currentGroup: 'A',
+  currentLeague: null
+};
+
+// Si cambias de usuario sin recargar, fuerza recargar estado del nuevo UID
+function reloadStateForCurrentUser(){
+  const uid = localStorage.getItem('wf26_cu') || null;
+  S.currentUser = uid;
+  const loaded = loadStateForUser_(uid);
+  S.users = loaded.users || {};
+  S.leagues = loaded.leagues || {};
+  S.predictions = loaded.predictions || {};
+  S.knockoutMatches = loaded.knockoutMatches || {};
+}
+
+async function refreshUserLeagues(){
+  try{
+    const { collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const all = await getDocs(collection(fbDb(), 'leagues'));
+    const owned=[];
+    all.forEach(d=>{
+      const data=d.data()||{};
+      const mem=data.members||[];
+      if(mem.includes(S.currentUser)) owned.push(d.id);
+    });
+    S.leagues = S.leagues || {};
+    owned.forEach(code=>{
+      const data = all.docs.find(x=>x.id===code)?.data() || {};
+      S.leagues[code] = data;
+      S.leagues[code].code = code;
+    });
+  }catch(e){
+    console.error('refreshUserLeagues error', e);
+  }
+}
+
+function save(){
+  if(!S.currentUser) return;
+  localStorage.setItem(storageKey_(S.currentUser,'users'),JSON.stringify(S.users));
+  localStorage.setItem(storageKey_(S.currentUser,'leagues'),JSON.stringify(S.leagues));
+  localStorage.setItem(storageKey_(S.currentUser,'preds'),JSON.stringify(S.predictions||{}));
+  localStorage.setItem(storageKey_(S.currentUser,'ko'),JSON.stringify(S.knockoutMatches||{}));
+
+  // limpiar cache vieja no-separada (por si venías usando el bug anterior)
+  localStorage.removeItem('wf26_users');
+  localStorage.removeItem('wf26_leagues');
+  localStorage.removeItem('wf26_preds');
+  localStorage.removeItem('wf26_ko');
+
+  // resultados/schedule compartidos (no dependen del usuario)
+  localStorage.setItem('wf26_results',JSON.stringify(S.results||{}));
+  localStorage.setItem('wf26_sched',JSON.stringify(S.schedule||{}));
+  localStorage.setItem('wf26_admin_results',JSON.stringify(S.adminResults||{}));
+  localStorage.setItem('wf26_vetoed',JSON.stringify(S.vetoed||{}));
+}
+
+const getCurrentUserEmail = () => {
+  try { return (S.users?.[S.currentUser]?.username || '').trim(); } catch { return ''; }
+};
+const isTotalAdmin = () => {
+  const email = getCurrentUserEmail();
+  return email && String(email).toLowerCase() === String(ADMIN_EMAIL).toLowerCase();
+};
+const isLeagueAdminForCurrentLeague = () => {
+  try {
+    if (!S.currentLeague) return false;
+    const l = S.leagues?.[S.currentLeague];
+    if (!l) return false;
+    return String(l.creatorUid) === String(S.currentUser);
+  } catch { return false; }
+};
+
+// ===== AUTH =====
+function switchAuthTab(t){
+  try{
+    document.querySelectorAll('.auth-tab').forEach((el,i)=>el.classList.toggle('active',i===(t==='login'?0:1)));
+    const lf=document.getElementById('login-form');
+    const rf=document.getElementById('register-form');
+    if(lf) lf.style.display=t==='login'?'block':'none';
+    if(rf) rf.style.display=t==='register'?'block':'none';
+    document.getElementById('login-err').textContent='';
+    document.getElementById('reg-err').textContent='';
+  }catch(e){ console.error('switchAuthTab error',e); }
+}
+
+async function doLogin(){
+  try{
+    const email=document.getElementById('login-email').value.trim();
+    const pass=document.getElementById('login-pass').value;
+    const errEl=document.getElementById('login-err');
+    if(!email||!pass){ errEl.textContent='Completa email y contraseña'; return; }
+
+    const { signInWithEmailAndPassword } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js');
+    const res = await signInWithEmailAndPassword(fbAuth(), email, pass);
+    const uid = res.user.uid;
+    S.currentUser = uid;
+    localStorage.setItem('wf26_cu', uid);
+
+    // Recargar estado local del usuario y sincronizar sus ligas desde Firestore
+    reloadStateForCurrentUser();
+    await refreshUserLeagues();
+
+    const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const snap = await getDoc(doc(fbDb(), 'users', uid));
+    S.users = S.users || {};
+    if(snap.exists()){
+      const d = snap.data()||{};
+      S.users[uid] = { username: d.username||'', firstName: (d.firstName||'').trim(), avatar: d.avatarUrl||null };
+    } else {
+      S.users[uid] = { username: email, firstName: '', avatar: null };
+    }
+
+    // Importante: cargar predicciones guardadas en Firestore para que persistan tras cerrar sesión
+    await loadPredictionsFromFirestoreForCurrentUser();
+
+    // Cargar cruces KO definidos por el admin
+    await loadKOMatchesFromFirestore();
+
+    showMain();
+  }catch(e){
+    console.error('doLogin error', e);
+    document.getElementById('login-err').textContent = 'Error al iniciar sesión: ' + (e?.message||String(e));
+  }
+}
+
+async function doRegister(){
+  try{
+    const firstName=document.getElementById('reg-firstname').value.trim();
+    const email=document.getElementById('reg-email').value.trim();
+    const pass=document.getElementById('reg-pass').value;
+    const err=document.getElementById('reg-err');
+
+    if(!firstName){ err.textContent='Pon tu nombre'; return; }
+    if(!email||!pass){ err.textContent='Completa email y contraseña'; return; }
+    if(pass.length<4){ err.textContent='Mínimo 4 caracteres'; return; }
+    if(!fbAuth()||!fbDb()){ err.textContent='Firebase no está inicializado'; return; }
+
+    const { createUserWithEmailAndPassword } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js');
+    const res = await createUserWithEmailAndPassword(fbAuth(), email, pass);
+    const uid = res.user.uid;
+
+    const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    await setDoc(doc(fbDb(), 'users', uid), {
+      username: email,
+      firstName,
+      avatarUrl: null,
+      createdAt: Date.now()
+    }, { merge: true });
+
+    S.currentUser = uid;
+    localStorage.setItem('wf26_cu', uid);
+    S.users = S.users || {};
+    S.users[uid] = { username: email, firstName, avatar: null };
+
+    showMain();
+  }catch(e){
+    console.error('doRegister error', e);
+    document.getElementById('reg-err').textContent = 'Error al crear cuenta: ' + (e?.message||String(e));
+  }
+}
+
+async function doLogout(){
+  try{
+    const { signOut } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js');
+    if(fbAuth()) await signOut(fbAuth());
+  }finally{
+    S.currentUser=null;
+    localStorage.removeItem('wf26_cu');
+    // no tocar otros caches compartidos; solo ocultar UI
+    S.leagues = {};
+    S.users = {};
+    S.predictions = {};
+    S.knockoutMatches = {};
+    S.currentLeague = null;
+    document.getElementById('main-screen').classList.remove('active');
+    document.getElementById('auth-screen').classList.add('active');
+    switchAuthTab('login');
+    document.getElementById('login-email').value='';
+    document.getElementById('login-pass').value='';
+  }
+}
+
+const RESULTS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzFtr_v_UbmNoS-7vtlaqFz2ObHyYFmMBXK6WGH2fygBkGeu8ywgbIJ0slk9EaVEs9Xfg/exec';
+let autoResultsTimer = null;
+
+async function fetchResultsFromSheet(){
+  try{
+    const r = await fetch(RESULTS_ENDPOINT, { cache: 'no-store' });
+    const data = await r.json();
+    const resultsMap = data?.results || {};
+    const nextResults = {};
+    Object.keys(resultsMap).forEach(mid=>{
+      const it = resultsMap[mid] || {};
+      const g1 = it.g1, g2 = it.g2;
+      if(g1===null||g1===undefined||g2===null||g2===undefined) return;
+      nextResults[mid] = { g1: Number(g1), g2: Number(g2) };
+    });
+    return { results: nextResults, schedule: data?.schedule || {} };
+  }catch(e){
+    console.error('fetchResultsFromSheet error', e);
+    return null;
+  }
+}
+
+// Carga resultados forzados y vetos del admin desde Firestore.
+// Actualiza S.adminResults y S.vetoed (ambos permanentes).
+async function fetchAdminResultsFromFirestore(){
+  try{
+    const { collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const leagueCodes = Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
+    const freshResults = {};
+    const freshVetoed = {};
+    await Promise.all(leagueCodes.map(async code=>{
+      try{
+        const snaps = await getDocs(collection(fbDb(), 'leagues', code, 'results'));
+        snaps.forEach(d=>{
+          const data = d.data();
+          if(data.vetoed === true) freshVetoed[d.id] = true;
+          else freshResults[d.id] = data;
+        });
+      }catch(e){ /* sin permisos o vacio */ }
+    }));
+    // Merge conservando cache (por si una liga ya no está cargada)
+    // Pero si algo estaba como resultado y ahora está vetado, quitar del adminResults
+    const merged = { ...(S.adminResults||{}), ...freshResults };
+    Object.keys(freshVetoed).forEach(mid => delete merged[mid]);
+    S.adminResults = merged;
+    S.vetoed = { ...(S.vetoed||{}), ...freshVetoed };
+    localStorage.setItem('wf26_admin_results', JSON.stringify(S.adminResults));
+    localStorage.setItem('wf26_vetoed', JSON.stringify(S.vetoed));
+    return S.adminResults;
+  }catch(e){
+    console.error('fetchAdminResultsFromFirestore error', e);
+    return S.adminResults || {};
+  }
+}
+
+// Carga los cruces KO definidos por el admin desde Firestore y actualiza S.knockoutMatches
+async function loadKOMatchesFromFirestore(){
+  try{
+    const { collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const snap = await getDocs(collection(fbDb(), 'koMatches'));
+    snap.forEach(d=>{
+      const phase = parseInt(d.id); // doc id es la fase: 1,2,3,4
+      const data = d.data() || {};
+      const matches = data.matches;
+      if(Array.isArray(matches) && matches.length){
+        S.knockoutMatches[phase] = matches;
+      }
+    });
+  }catch(e){
+    console.error('loadKOMatchesFromFirestore error', e);
+  }
+}
+
+async function startAutoUpdateResults(){
+  console.log('[wf26] startAutoUpdateResults');
+  if(autoResultsTimer) clearInterval(autoResultsTimer);
+
+  // Carga inicial: API + Firestore en paralelo
   const [first, adminResults] = await Promise.all([fetchResultsFromSheet(), fetchAdminResultsFromFirestore(), loadKOMatchesFromFirestore()]);
   if(first){
     S.schedule = first.schedule || {};
