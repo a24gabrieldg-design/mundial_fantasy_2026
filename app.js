@@ -22,7 +22,7 @@ const fbStorage = () => getFB().storage;
 const GROUP_TEAMS = {
   A:[{f:'🇲🇽',n:'México'},{f:'🇿🇦',n:'Sudáfrica'},{f:'🇰🇷',n:'Corea del Sur'},{f:'🇨🇿',n:'República Checa'}],
   B:[{f:'🇨🇦',n:'Canadá'},{f:'🇧🇦',n:'Bosnia y Herzegovina'},{f:'🇶🇦',n:'Qatar'},{f:'🇨🇭',n:'Suiza'}],
-  C:[{f:'🇧🇷',n:'Brasil'},{f:'🇲🇦',n:'Marruecos'},{f:'🇭🇹',n:'Haití'},{f:'🏴󠁧󠁢󠁳󠁣󠁴󠁿',n:'Escocia'}],
+  C:[{f:'🇧🇷',n:'Brasil'},{f:'🇲🇦',n:'Marruecos'},{f:'🇭🇹',n:'Haití'},{f:'🏴',n:'Escocia'}],
   D:[{f:'🇺🇸',n:'Estados Unidos'},{f:'🇵🇾',n:'Paraguay'},{f:'🇦🇺',n:'Australia'},{f:'🇹🇷',n:'Turquía'}],
   E:[{f:'🇩🇪',n:'Alemania'},{f:'🇨🇼',n:'Curazao'},{f:'🇨🇮',n:'Costa de Marfil'},{f:'🇪🇨',n:'Ecuador'}],
   F:[{f:'🇳🇱',n:'Países Bajos'},{f:'🇯🇵',n:'Japón'},{f:'🇸🇪',n:'Suecia'},{f:'🇹🇳',n:'Túnez'}],
@@ -31,8 +31,11 @@ const GROUP_TEAMS = {
   I:[{f:'🇫🇷',n:'Francia'},{f:'🇸🇳',n:'Senegal'},{f:'🇮🇶',n:'Irak'},{f:'🇳🇴',n:'Noruega'}],
   J:[{f:'🇦🇷',n:'Argentina'},{f:'🇩🇿',n:'Argelia'},{f:'🇦🇹',n:'Austria'},{f:'🇯🇴',n:'Jordania'}],
   K:[{f:'🇵🇹',n:'Portugal'},{f:'🇨🇩',n:'República Democrática del Congo'},{f:'🇺🇿',n:'Uzbekistán'},{f:'🇨🇴',n:'Colombia'}],
-  L:[{f:'🏴󠁧󠁢󠁥󠁮󠁧󠁿',n:'Inglaterra'},{f:'🇭🇷',n:'Croacia'},{f:'🇬🇭',n:'Ghana'},{f:'🇵🇦',n:'Panamá'}]
+  L:[{f:'🏴',n:'Inglaterra'},{f:'🇭🇷',n:'Croacia'},{f:'🇬🇭',n:'Ghana'},{f:'🇵🇦',n:'Panamá'}]
 };
+
+// Lista plana de todos los equipos del torneo (para selects del admin en KO)
+const ALL_TEAMS = Object.values(GROUP_TEAMS).flat();
 
 // Generate group matches
 // Fechas y horas en hora España peninsular (CEST, UTC+2)
@@ -199,6 +202,242 @@ async function doLogin(){
 
     // Recargar estado local del usuario y sincronizar sus ligas desde Firestore
     reloadStateForCurrentUser();
+    await refreshUserLeagues();
+
+    const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const snap = await getDoc(doc(fbDb(), 'users', uid));
+    S.users = S.users || {};
+    if(snap.exists()){
+      const d = snap.data()||{};
+      S.users[uid] = { username: d.username||'', firstName: (d.firstName||'').trim(), avatar: d.avatarUrl||null };
+    } else {
+      S.users[uid] = { username: email, firstName: '', avatar: null };
+    }
+
+    // Importante: cargar predicciones guardadas en Firestore para que persistan tras cerrar sesión
+    await loadPredictionsFromFirestoreForCurrentUser();
+
+    // Cargar cruces KO definidos por el admin
+    await loadKOMatchesFromFirestore();
+
+    showMain();
+  }catch(e){
+    console.error('doLogin error', e);
+    document.getElementById('login-err').textContent = 'Error al iniciar sesión: ' + (e?.message||String(e));
+  }
+}
+
+async function doRegister(){
+  try{
+    const firstName=document.getElementById('reg-firstname').value.trim();
+    const email=document.getElementById('reg-email').value.trim();
+    const pass=document.getElementById('reg-pass').value;
+    const err=document.getElementById('reg-err');
+
+    if(!firstName){ err.textContent='Pon tu nombre'; return; }
+    if(!email||!pass){ err.textContent='Completa email y contraseña'; return; }
+    if(pass.length<4){ err.textContent='Mínimo 4 caracteres'; return; }
+    if(!fbAuth()||!fbDb()){ err.textContent='Firebase no está inicializado'; return; }
+
+    const { createUserWithEmailAndPassword } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js');
+    const res = await createUserWithEmailAndPassword(fbAuth(), email, pass);
+    const uid = res.user.uid;
+
+    const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    await setDoc(doc(fbDb(), 'users', uid), {
+      username: email,
+      firstName,
+      avatarUrl: null,
+      createdAt: Date.now()
+    }, { merge: true });
+
+    S.currentUser = uid;
+    localStorage.setItem('wf26_cu', uid);
+    S.users = S.users || {};
+    S.users[uid] = { username: email, firstName, avatar: null };
+
+    showMain();
+  }catch(e){
+    console.error('doRegister error', e);
+    document.getElementById('reg-err').textContent = 'Error al crear cuenta: ' + (e?.message||String(e));
+  }
+}
+
+async function doLogout(){
+  try{
+    const { signOut } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js');
+    if(fbAuth()) await signOut(fbAuth());
+  }finally{
+    S.currentUser=null;
+    localStorage.removeItem('wf26_cu');
+    // no tocar otros caches compartidos; solo ocultar UI
+    S.leagues = {};
+    S.users = {};
+    S.predictions = {};
+    S.knockoutMatches = {};
+    S.currentLeague = null;
+    document.getElementById('main-screen').classList.remove('active');
+    document.getElementById('auth-screen').classList.add('active');
+    switchAuthTab('login');
+    document.getElementById('login-email').value='';
+    document.getElementById('login-pass').value='';
+  }
+}
+
+const RESULTS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzFtr_v_UbmNoS-7vtlaqFz2ObHyYFmMBXK6WGH2fygBkGeu8ywgbIJ0slk9EaVEs9Xfg/exec';
+let autoResultsTimer = null;
+
+async function fetchResultsFromSheet(){
+  try{
+    const r = await fetch(RESULTS_ENDPOINT, { cache: 'no-store' });
+    const data = await r.json();
+    const resultsMap = data?.results || {};
+    const nextResults = {};
+    Object.keys(resultsMap).forEach(mid=>{
+      const it = resultsMap[mid] || {};
+      const g1 = it.g1, g2 = it.g2;
+      if(g1===null||g1===undefined||g2===null||g2===undefined) return;
+      nextResults[mid] = { g1: Number(g1), g2: Number(g2) };
+    });
+    return { results: nextResults, schedule: data?.schedule || {} };
+  }catch(e){
+    console.error('fetchResultsFromSheet error', e);
+    return null;
+  }
+}
+
+// Carga resultados forzados y vetos del admin desde Firestore.
+// Actualiza S.adminResults y S.vetoed (ambos permanentes).
+async function fetchAdminResultsFromFirestore(){
+  try{
+    const { collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const leagueCodes = Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
+    const freshResults = {};
+    const freshVetoed = {};
+    await Promise.all(leagueCodes.map(async code=>{
+      try{
+        const snaps = await getDocs(collection(fbDb(), 'leagues', code, 'results'));
+        snaps.forEach(d=>{
+          const data = d.data();
+          if(data.vetoed === true) freshVetoed[d.id] = true;
+          else freshResults[d.id] = data;
+        });
+      }catch(e){ /* sin permisos o vacio */ }
+    }));
+    // Merge conservando cache (por si una liga ya no está cargada)
+    // Pero si algo estaba como resultado y ahora está vetado, quitar del adminResults
+    const merged = { ...(S.adminResults||{}), ...freshResults };
+    Object.keys(freshVetoed).forEach(mid => delete merged[mid]);
+    S.adminResults = merged;
+    S.vetoed = { ...(S.vetoed||{}), ...freshVetoed };
+    localStorage.setItem('wf26_admin_results', JSON.stringify(S.adminResults));
+    localStorage.setItem('wf26_vetoed', JSON.stringify(S.vetoed));
+    return S.adminResults;
+  }catch(e){
+    console.error('fetchAdminResultsFromFirestore error', e);
+    return S.adminResults || {};
+  }
+}
+
+// Carga los cruces KO definidos por el admin desde Firestore y actualiza S.knockoutMatches
+async function loadKOMatchesFromFirestore(){
+  try{
+    const { collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const snap = await getDocs(collection(fbDb(), 'koMatches'));
+    snap.forEach(d=>{
+      const phase = parseInt(d.id); // doc id es la fase: 1,2,3,4
+      const data = d.data() || {};
+      const matches = data.matches;
+      if(Array.isArray(matches) && matches.length){
+        S.knockoutMatches[phase] = matches;
+      }
+    });
+  }catch(e){
+    console.error('loadKOMatchesFromFirestore error', e);
+  }
+}
+
+async function startAutoUpdateResults(){
+  console.log('[wf26] startAutoUpdateResults');
+  if(autoResultsTimer) clearInterval(autoResultsTimer);
+
+  // Carga inicial: API + Firestore en paralelo
+  const [first, adminResults] = await Promise.all([fetchResultsFromSheet(), fetchAdminResultsFromFirestore(), loadKOMatchesFromFirestore()]);
+  if(first){
+    S.schedule = first.schedule || {};
+    // adminResults ya actualizó S.adminResults internamente
+    // Filtrar de la API los partidos vetados antes del merge inicial
+    const initApiResults = first.results || {};
+    Object.keys(S.vetoed||{}).forEach(mid => delete initApiResults[mid]);
+    S.results = { ...initApiResults, ...(S.adminResults||{}) };
+    save();
+    renderPredTab();
+    renderRanking();
+    renderPhaseBody();
+  }
+
+  autoResultsTimer = setInterval(async ()=>{
+    const next = await fetchResultsFromSheet();
+    if(!next) return;
+    // Refrescar admin results desde Firestore (en background); si falla, S.adminResults ya tiene el cache
+    fetchAdminResultsFromFirestore().catch(()=>{});
+    // Filtrar de la API los partidos vetados por admin antes del merge
+    const apiResults = next.results || {};
+    Object.keys(S.vetoed||{}).forEach(mid => delete apiResults[mid]);
+    const nextResults = { ...apiResults, ...(S.adminResults||{}) };
+    const nextSchedule = next.schedule || {};
+    const prev = S.results || {};
+    const changed = Object.keys(nextResults).some(mid=>{
+      const a=nextResults[mid]||{}, b=prev[mid]||{};
+      return Number(a.g1)!==Number(b.g1)||Number(a.g2)!==Number(b.g2);
+    }) || Object.keys(nextResults).length !== Object.keys(prev).length;
+    const prevSched = S.schedule || {};
+    const schedChanged = Object.keys(nextSchedule).some(mid=>{
+      const a=nextSchedule[mid]||{}, b=prevSched[mid]||{};
+      return a.date!==b.date||a.time!==b.time;
+    }) || Object.keys(prevSched).length !== Object.keys(nextSchedule).length;
+    if(!changed && !schedChanged) return;
+    S.results = nextResults;
+    S.schedule = nextSchedule;
+    Object.keys(S.predictions||{}).forEach(leagueCode=>{
+      Object.keys(S.predictions[leagueCode]||{}).forEach(uid=>{
+        if(uid !== S.currentUser) delete S.predictions[leagueCode][uid];
+      });
+    });
+    save();
+    renderPhaseBody();
+    renderPredTab();
+    renderRanking();
+  }, 60000);
+}
+
+function showMain(){
+  document.getElementById('auth-screen').classList.remove('active');
+  document.getElementById('main-screen').classList.add('active');
+  document.getElementById('top-bar-right').innerHTML = isTotalAdmin()?'<span class="admin-badge">ADMIN</span>':'';
+  goTab('ligas',0);
+  renderProfileInfo();
+  startAutoUpdateResults();
+}
+
+// ===== NAV =====
+function goTab(name,idx){
+  document.querySelectorAll('.tab-page').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  document.getElementById('nav-'+idx).classList.add('active');
+  const titles=['Mis Ligas','Predicciones','Clasificación','Información'];
+  document.getElementById('top-bar-title').textContent=titles[idx];
+  if(name==='ligas') renderLeagues();
+  if(name==='preds') renderPredTab();
+  if(name==='tabla') renderRanking();
+  if(name==='info') renderProfileInfo();
+}
+
+// ===== LIGAS =====
+let pendingAvatar=null;
+function generateCode(){
+  const c='ABCDEFGHJKLMNPQRS    reloadStateForCurrentUser();
     await refreshUserLeagues();
 
     const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
