@@ -22,7 +22,7 @@ const fbStorage = () => getFB().storage;
 const GROUP_TEAMS = {
   A:[{f:'🇲🇽',n:'México'},{f:'🇿🇦',n:'Sudáfrica'},{f:'🇰🇷',n:'Corea del Sur'},{f:'🇨🇿',n:'República Checa'}],
   B:[{f:'🇨🇦',n:'Canadá'},{f:'🇧🇦',n:'Bosnia y Herzegovina'},{f:'🇶🇦',n:'Qatar'},{f:'🇨🇭',n:'Suiza'}],
-  C:[{f:'🇧🇷',n:'Brasil'},{f:'🇲🇦',n:'Marruecos'},{f:'🇭🇹',n:'Haití'},{f:'🏴',n:'Escocia'}],
+  C:[{f:'🇧🇷',n:'Brasil'},{f:'🇲🇦',n:'Marruecos'},{f:'🇭🇹',n:'Haití'},{f:'🏴󠁧󠁢󠁳󠁣󠁴󠁿',n:'Escocia'}],
   D:[{f:'🇺🇸',n:'Estados Unidos'},{f:'🇵🇾',n:'Paraguay'},{f:'🇦🇺',n:'Australia'},{f:'🇹🇷',n:'Turquía'}],
   E:[{f:'🇩🇪',n:'Alemania'},{f:'🇨🇼',n:'Curazao'},{f:'🇨🇮',n:'Costa de Marfil'},{f:'🇪🇨',n:'Ecuador'}],
   F:[{f:'🇳🇱',n:'Países Bajos'},{f:'🇯🇵',n:'Japón'},{f:'🇸🇪',n:'Suecia'},{f:'🇹🇳',n:'Túnez'}],
@@ -30,8 +30,8 @@ const GROUP_TEAMS = {
   H:[{f:'🇪🇸',n:'España'},{f:'🇨🇻',n:'Cabo Verde'},{f:'🇸🇦',n:'Arabia Saudí'},{f:'🇺🇾',n:'Uruguay'}],
   I:[{f:'🇫🇷',n:'Francia'},{f:'🇸🇳',n:'Senegal'},{f:'🇮🇶',n:'Irak'},{f:'🇳🇴',n:'Noruega'}],
   J:[{f:'🇦🇷',n:'Argentina'},{f:'🇩🇿',n:'Argelia'},{f:'🇦🇹',n:'Austria'},{f:'🇯🇴',n:'Jordania'}],
-  K:[{f:'🇵🇹',n:'Portugal'},{f:'🇨🇩',n:'República Democrática del Congo'},{f:'🇺🇿',n:'Uzbekistán'},{f:'🇨🇴',n:'Colombia'}],
-  L:[{f:'🏴',n:'Inglaterra'},{f:'🇭🇷',n:'Croacia'},{f:'🇬🇭',n:'Ghana'},{f:'🇵🇦',n:'Panamá'}]
+  K:[{f:'🇵🇹',n:'Portugal'},{f:'🇨🇩',n:'R.D. Congo'},{f:'🇺🇿',n:'Uzbekistán'},{f:'🇨🇴',n:'Colombia'}],
+  L:[{f:'🏴󠁧󠁢󠁥󠁮󠁧󠁿',n:'Inglaterra'},{f:'🇭🇷',n:'Croacia'},{f:'🇬🇭',n:'Ghana'},{f:'🇵🇦',n:'Panamá'}]
 };
 
 // Generate group matches
