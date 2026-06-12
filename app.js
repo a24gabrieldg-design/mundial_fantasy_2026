@@ -432,26 +432,6 @@ function openModal(type, extra){
     <div class="modal-field"><label>Nombre de la liga</label><input type="text" id="lname-inp" placeholder="Ej: Los Cracks"></div>
     <div class="modal-btns"><button class="btn-cancel" onclick="closeModal()">Cancelar</button><button class="btn-confirm" onclick="createLeague()">Crear</button></div>
     <div class="msg-err" id="create-err"></div>`;
-  } else if(type==='confirm-delete-league'){
-    const { code, name } = extra || {};
-    mc.innerHTML=`
-      <div style="padding:20px 20px 8px">
-        <div style="font-size:20px;font-weight:800;margin-bottom:6px;color:#ef4444">🗑️ Eliminar liga</div>
-        <div style="font-size:13px;color:var(--text2);margin-bottom:18px">
-          Estás a punto de eliminar <strong style="color:var(--text)">${name}</strong>.<br>
-          Esta acción es <strong style="color:#ef4444">irreversible</strong>: se borrarán la liga y todos sus datos.<br><br>
-          Escribe el código de la liga para confirmar:
-        </div>
-        <div class="auth-field">
-          <label>Código de liga</label>
-          <input type="text" id="delete-confirm-code" placeholder="${code}" style="text-transform:uppercase;letter-spacing:2px;font-weight:700;" oninput="this.value=this.value.toUpperCase()">
-        </div>
-        <div class="auth-error" id="delete-confirm-err"></div>
-        <div style="display:flex;gap:10px;margin-top:16px">
-          <button class="btn-secondary" style="flex:1" onclick="closeModal()">Cancelar</button>
-          <button class="btn-danger" style="flex:1" onclick="doDeleteLeague('${code}')">Eliminar</button>
-        </div>
-      </div>`;
   } else if(type==='join-league'){
     mc.innerHTML=`<div class="modal-title">🔑 Unirse a una liga</div>
     <div class="modal-field"><label>Código de la liga</label><input type="text" id="jcode-inp" placeholder="ABC123" style="text-transform:uppercase;letter-spacing:3px;font-size:18px;text-align:center"></div>
@@ -559,8 +539,58 @@ function selectLeague(code){ S.currentLeague=code; renderLeagues(); }
 
 function confirmDeleteLeague(code){
   const l = S.leagues[code];
-  const name = l?.name || code;
-  openModal('confirm-delete-league', { code, name });
+  const name = l ? l.name : code;
+
+  // Crear overlay propio para no interferir con el modal principal
+  let ov = document.getElementById('delete-league-overlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'delete-league-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
+    document.getElementById('app').appendChild(ov);
+  }
+  ov.style.display = 'flex';
+  ov.innerHTML = '';
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--bg2);border-radius:20px 20px 0 0;padding:24px 20px 32px;width:100%;max-width:390px;border-top:1px solid var(--border)';
+  box.innerHTML = '<div style="width:36px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 20px"></div>';
+
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:18px;font-weight:800;color:#ef4444;margin-bottom:10px';
+  title.textContent = '🗑️ Eliminar liga';
+  box.appendChild(title);
+
+  const msg = document.createElement('div');
+  msg.style.cssText = 'font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:24px';
+  msg.innerHTML = 'Estás a punto de eliminar <strong style="color:var(--text)">' + name + '</strong>.<br>Esta acción es <strong style="color:#ef4444">irreversible</strong>: se borrarán la liga y todos sus datos.';
+  box.appendChild(msg);
+
+  const btns = document.createElement('div');
+  btns.style.cssText = 'display:flex;gap:10px';
+
+  const btnCancel = document.createElement('button');
+  btnCancel.className = 'btn-secondary';
+  btnCancel.style.cssText = 'flex:1;margin-top:0';
+  btnCancel.textContent = 'Cancelar';
+  btnCancel.onclick = () => { ov.style.display = 'none'; };
+
+  const btnDelete = document.createElement('button');
+  btnDelete.className = 'btn-danger';
+  btnDelete.style.cssText = 'flex:1;margin-top:0';
+  btnDelete.textContent = 'Eliminar';
+  btnDelete.onclick = async () => {
+    ov.style.display = 'none';
+    await leaveLeague(code, 'delete');
+  };
+
+  btns.appendChild(btnCancel);
+  btns.appendChild(btnDelete);
+  box.appendChild(btns);
+  ov.appendChild(box);
+
+  // Cerrar al tocar fuera
+  ov.onclick = (e) => { if(e.target === ov) ov.style.display = 'none'; };
 }
 
 async function doDeleteLeague(code){
