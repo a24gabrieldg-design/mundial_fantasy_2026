@@ -803,8 +803,8 @@ async function adminSetResult(mid){
     const { doc, setDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const rg = { g1: parseInt(g1), g2: parseInt(g2) };
 
-    // 1) Guardar resultado
-    await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'results', mid), rg, { merge: true });
+    // 1) Guardar resultado (merge:false para eliminar cualquier campo 'vetoed' previo)
+    await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'results', mid), rg, { merge: false });
 
     // 2) Recalcular points para TODAS las predicciones de la liga
     const predSnaps = await getDocs(collection(fbDb(), 'leagues', S.currentLeague, 'predictions'));
@@ -814,8 +814,8 @@ async function adminSetResult(mid){
       const p=data[mid]||{g1:'',g2:''};
       const pts=calcPoints(rg,p);
       const updated = { ...data, [mid]: { ...p, points: pts } };
-      // Calcular total acumulado para que otros usuarios puedan leerlo
-      const totalPts = Object.values(updated).reduce((acc,v)=>acc+(v?.points||0),0);
+      // Calcular total acumulado (excluir _totalPts que no es una predicción)
+      const totalPts = Object.entries(updated).reduce((acc,[k,v])=> k==='_totalPts'?acc : acc+(v?.points||0), 0);
       updated._totalPts = totalPts;
       await setDoc(
         doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid),
