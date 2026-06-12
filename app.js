@@ -417,7 +417,7 @@ function generateCode(){
   let code='';for(let i=0;i<6;i++) code+=c[Math.floor(Math.random()*c.length)];
   return S.leagues[code]?generateCode():code;
 }
-function openModal(type){
+function openModal(type, extra){
   pendingAvatar=null;
   document.getElementById('modal-overlay').style.display='flex';
   const mc=document.getElementById('modal-content');
