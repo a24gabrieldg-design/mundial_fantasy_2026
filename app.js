@@ -42,7 +42,7 @@ function makeGroupMatches(){
     A:[['2026-06-11','21:00'],['2026-06-12','04:00'],['2026-06-18','18:00'],['2026-06-19','03:00'],['2026-06-25','03:00'],['2026-06-25','03:00']],
     B:[['2026-06-12','21:00'],['2026-06-13','21:00'],['2026-06-18','21:00'],['2026-06-19','00:00'],['2026-06-24','21:00'],['2026-06-24','21:00']],
     C:[['2026-06-14','00:00'],['2026-06-14','03:00'],['2026-06-20','00:00'],['2026-06-20','03:00'],['2026-06-25','00:00'],['2026-06-25','00:00']],
-    D:[['2026-06-13','03:00'],['2026-06-14','06:00'],['2026-06-19','21:00'],['2026-06-19','06:00'],['2026-06-26','04:00'],['2026-06-26','04:00']],
+    D:[['2026-06-13','03:00'],['2026-06-13','06:00'],['2026-06-19','21:00'],['2026-06-19','06:00'],['2026-06-26','04:00'],['2026-06-26','04:00']],
     E:[['2026-06-14','19:00'],['2026-06-15','01:00'],['2026-06-21','00:00'],['2026-06-21','02:00'],['2026-06-26','00:00'],['2026-06-26','00:00']],
     F:[['2026-06-15','00:00'],['2026-06-15','04:00'],['2026-06-20','19:00'],['2026-06-20','06:00'],['2026-06-26','01:00'],['2026-06-26','01:00']],
     G:[['2026-06-15','21:00'],['2026-06-16','03:00'],['2026-06-22','01:00'],['2026-06-22','03:00'],['2026-06-27','05:00'],['2026-06-27','05:00']],
@@ -97,6 +97,10 @@ let S = {
   adminResults: JSON.parse(localStorage.getItem('wf26_admin_results')||'{}'),
   // partidos vetados por admin (borrados manualmente): la API no puede sobreescribirlos
   vetoed: JSON.parse(localStorage.getItem('wf26_vetoed')||'{}'),
+  // fecha/hora forzadas por admin (prioridad sobre la API): { [mid]: {date,time} }
+  scheduleOverrides: JSON.parse(localStorage.getItem('wf26_sched_overrides')||'{}'),
+  // emparejamientos de fases knockout definidos por admin (globales, no por liga): { [phase]: [matches] }
+  knockoutOverrides: JSON.parse(localStorage.getItem('wf26_ko_overrides')||'{}'),
   currentUser: localStorage.getItem('wf26_cu')||null,
   currentPhase: 0,
   currentGroup: 'A',
@@ -153,6 +157,8 @@ function save(){
   localStorage.setItem('wf26_sched',JSON.stringify(S.schedule||{}));
   localStorage.setItem('wf26_admin_results',JSON.stringify(S.adminResults||{}));
   localStorage.setItem('wf26_vetoed',JSON.stringify(S.vetoed||{}));
+  localStorage.setItem('wf26_sched_overrides',JSON.stringify(S.scheduleOverrides||{}));
+  localStorage.setItem('wf26_ko_overrides',JSON.stringify(S.knockoutOverrides||{}));
 }
 
 const getCurrentUserEmail = () => {
@@ -333,19 +339,95 @@ async function fetchAdminResultsFromFirestore(){
   }
 }
 
+// Carga overrides globales del torneo (fecha/hora forzada y cruces de knockout) desde Firestore.
+async function fetchTournamentOverrides(){
+  try{
+    const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const [schedSnap, koSnap] = await Promise.all([
+      getDoc(doc(fbDb(), 'tournament', 'schedule_overrides')),
+      getDoc(doc(fbDb(), 'tournament', 'knockout_overrides'))
+    ]);
+    S.scheduleOverrides = schedSnap.exists() ? (schedSnap.data()||{}) : (S.scheduleOverrides||{});
+    S.knockoutOverrides = koSnap.exists() ? (koSnap.data()||{}) : (S.knockoutOverrides||{});
+    localStorage.setItem('wf26_sched_overrides', JSON.stringify(S.scheduleOverrides));
+    localStorage.setItem('wf26_ko_overrides', JSON.stringify(S.knockoutOverrides));
+  }catch(e){
+    console.error('fetchTournamentOverrides error', e);
+  }
+}
+
+// Admin: forzar fecha/hora de un partido (prioridad sobre la API externa)
+async function adminSetSchedule(mid){
+  if(!isTotalAdmin()) return;
+  const dateVal = document.getElementById('adm-date-'+mid)?.value;
+  const timeVal = document.getElementById('adm-time-'+mid)?.value;
+  if(!dateVal || !timeVal){ alert('Indica fecha y hora'); return; }
+  try{
+    const { doc, setDoc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const ref = doc(fbDb(), 'tournament', 'schedule_overrides');
+    const snap = await getDoc(ref);
+    const existing = snap.exists() ? (snap.data()||{}) : {};
+    const next = { ...existing, [mid]: { date: dateVal, time: timeVal } };
+    await setDoc(ref, next, { merge: false });
+    S.scheduleOverrides = next;
+    localStorage.setItem('wf26_sched_overrides', JSON.stringify(next));
+    if(!S.schedule) S.schedule = {};
+    S.schedule[mid] = { date: dateVal, time: timeVal };
+    save();
+    renderPhaseBody();
+    const ind = document.getElementById('save-ind');
+    if(ind){ ind.textContent='✅ Horario actualizado'; setTimeout(()=>{ if(ind) ind.textContent=''; }, 2000); }
+  }catch(e){ console.error('adminSetSchedule error', e); alert('Error: '+(e?.message||String(e))); }
+}
+
+// Admin: definir los dos equipos de un partido de fase eliminatoria (cruces)
+async function adminSetKnockoutTeams(phase, mid){
+  if(!isTotalAdmin()) return;
+  const n1 = document.getElementById('adm-ko-n1-'+mid)?.value?.trim();
+  const n2 = document.getElementById('adm-ko-n2-'+mid)?.value?.trim();
+  const t1 = document.getElementById('adm-ko-t1-'+mid)?.value?.trim() || '🏳️';
+  const t2 = document.getElementById('adm-ko-t2-'+mid)?.value?.trim() || '🏳️';
+  if(!n1 || !n2){ alert('Indica ambos equipos'); return; }
+  try{
+    const { doc, setDoc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const ref = doc(fbDb(), 'tournament', 'knockout_overrides');
+    const snap = await getDoc(ref);
+    const existing = snap.exists() ? (snap.data()||{}) : {};
+    const phaseMatches = existing[phase] || KNOCKOUT_TEMPLATES[phase].map(m=>({...m}));
+    const idx = phaseMatches.findIndex(m=>m.id===mid);
+    const base = idx>-1 ? phaseMatches[idx] : KNOCKOUT_TEMPLATES[phase].find(m=>m.id===mid);
+    const updatedMatch = { ...base, n1, n2, t1, t2 };
+    const updatedPhase = idx>-1 ? phaseMatches.map((m,i)=>i===idx?updatedMatch:m) : [...phaseMatches, updatedMatch];
+    const next = { ...existing, [phase]: updatedPhase };
+    await setDoc(ref, next, { merge: false });
+    S.knockoutOverrides = next;
+    S.knockoutMatches[phase] = updatedPhase;
+    localStorage.setItem('wf26_ko_overrides', JSON.stringify(next));
+    save();
+    renderPhaseBody();
+    const ind = document.getElementById('save-ind');
+    if(ind){ ind.textContent='✅ Cruce actualizado'; setTimeout(()=>{ if(ind) ind.textContent=''; }, 2000); }
+  }catch(e){ console.error('adminSetKnockoutTeams error', e); alert('Error: '+(e?.message||String(e))); }
+}
+
 async function startAutoUpdateResults(){
   console.log('[wf26] startAutoUpdateResults');
   if(autoResultsTimer) clearInterval(autoResultsTimer);
 
   // Carga inicial: API + Firestore en paralelo
-  const [first, adminResults] = await Promise.all([fetchResultsFromSheet(), fetchAdminResultsFromFirestore()]);
+  const [first] = await Promise.all([fetchResultsFromSheet(), fetchAdminResultsFromFirestore(), fetchTournamentOverrides()]);
   if(first){
-    S.schedule = first.schedule || {};
+    // El schedule de la API es la base; los overrides de admin tienen prioridad
+    S.schedule = { ...(first.schedule||{}), ...(S.scheduleOverrides||{}) };
     // adminResults ya actualizó S.adminResults internamente
     // Filtrar de la API los partidos vetados antes del merge inicial
     const initApiResults = first.results || {};
     Object.keys(S.vetoed||{}).forEach(mid => delete initApiResults[mid]);
     S.results = { ...initApiResults, ...(S.adminResults||{}) };
+    // Aplicar cruces de knockout definidos por admin
+    Object.keys(S.knockoutOverrides||{}).forEach(phase=>{
+      S.knockoutMatches[phase] = S.knockoutOverrides[phase];
+    });
     save();
     renderPredTab();
     renderRanking();
@@ -355,13 +437,15 @@ async function startAutoUpdateResults(){
   autoResultsTimer = setInterval(async ()=>{
     const next = await fetchResultsFromSheet();
     if(!next) return;
-    // Refrescar admin results desde Firestore (en background); si falla, S.adminResults ya tiene el cache
+    // Refrescar admin results y overrides desde Firestore (en background)
     fetchAdminResultsFromFirestore().catch(()=>{});
+    fetchTournamentOverrides().catch(()=>{});
     // Filtrar de la API los partidos vetados por admin antes del merge
     const apiResults = next.results || {};
     Object.keys(S.vetoed||{}).forEach(mid => delete apiResults[mid]);
     const nextResults = { ...apiResults, ...(S.adminResults||{}) };
-    const nextSchedule = next.schedule || {};
+    // El schedule forzado por admin tiene prioridad sobre el de la API
+    const nextSchedule = { ...(next.schedule||{}), ...(S.scheduleOverrides||{}) };
     const prev = S.results || {};
     const changed = Object.keys(nextResults).some(mid=>{
       const a=nextResults[mid]||{}, b=prev[mid]||{};
@@ -375,6 +459,9 @@ async function startAutoUpdateResults(){
     if(!changed && !schedChanged) return;
     S.results = nextResults;
     S.schedule = nextSchedule;
+    Object.keys(S.knockoutOverrides||{}).forEach(phase=>{
+      S.knockoutMatches[phase] = S.knockoutOverrides[phase];
+    });
     Object.keys(S.predictions||{}).forEach(leagueCode=>{
       Object.keys(S.predictions[leagueCode]||{}).forEach(uid=>{
         if(uid !== S.currentUser) delete S.predictions[leagueCode][uid];
@@ -744,17 +831,17 @@ function renderGroupMatchList(){
   const c=document.getElementById('gmatches'); if(!c) return;
   const matches=MATCHES_GROUP[S.currentGroup]||[];
   const preds=((S.predictions[S.currentLeague]||{})[S.currentUser])||{};
-  c.innerHTML=`<div class="group-header">Grupo ${S.currentGroup}</div>`+matches.map(m=>matchCardHTML(m,preds))+`<div class="save-indicator" id="save-ind"></div>`;
+  c.innerHTML=`<div class="group-header">Grupo ${S.currentGroup}</div>`+matches.map(m=>matchCardHTML(m,preds,false,null))+`<div class="save-indicator" id="save-ind"></div>`;
 }
 
 function renderKOMatches(){
   const c=document.getElementById('ko-matches-list'); if(!c) return;
   const matches=S.knockoutMatches[S.currentPhase]||KNOCKOUT_TEMPLATES[S.currentPhase];
   const preds=((S.predictions[S.currentLeague]||{})[S.currentUser])||{};
-  c.innerHTML=matches.map(m=>matchCardHTML(m,preds)).join('')+`<div class="save-indicator" id="save-ind"></div>`;
+  c.innerHTML=matches.map(m=>matchCardHTML(m,preds,true,S.currentPhase)).join('')+`<div class="save-indicator" id="save-ind"></div>`;
 }
 
-function matchCardHTML(m, preds){
+function matchCardHTML(m, preds, isKnockout, koPhase){
   const p=preds[m.id]||{g1:'',g2:''};
   const sd = S.schedule?.[m.id];
   const matchDtParts = (sd?.date||m.date).split('-');
@@ -814,8 +901,28 @@ function matchCardHTML(m, preds){
   const adminLockControls = isTotalAdmin() ? `
     <div class="admin-lock-controls">
       <button class="btn-admin" onclick="adminClearResult('${m.id}')" style="border-color:#ef4444;color:#ef4444">Borrar resultado</button>
+      <button class="btn-admin" onclick="forceToggleLock('${m.id}','0')" style="border-color:var(--success);color:var(--success)">Reabrir</button>
       <button class="btn-admin" onclick="forceToggleLock('${m.id}','1')">Cerrar</button>
       <button class="btn-admin" onclick="forceToggleLock('${m.id}','clear')">Reset</button>
+    </div>` : '';
+
+  const adminScheduleRow = isTotalAdmin() ? `
+    <div class="admin-row" style="flex-wrap:wrap">
+      <span style="font-size:10px;color:var(--admin);font-weight:700">FECHA/HORA:</span>
+      <input class="admin-input" id="adm-date-${m.id}" type="date" value="${sd?.date||m.date}" style="width:auto">
+      <input class="admin-input" id="adm-time-${m.id}" type="time" value="${sd?.time||m.time}" style="width:auto">
+      <button class="btn-admin" onclick="adminSetSchedule('${m.id}')">Guardar</button>
+    </div>` : '';
+
+  const adminKnockoutRow = (isTotalAdmin() && isKnockout) ? `
+    <div class="admin-row" style="flex-wrap:wrap">
+      <span style="font-size:10px;color:var(--admin);font-weight:700">EQUIPOS:</span>
+      <input class="admin-input" id="adm-ko-t1-${m.id}" type="text" value="${m.t1==='❓'?'':m.t1}" placeholder="🏳️" style="width:44px">
+      <input class="admin-input" id="adm-ko-n1-${m.id}" type="text" value="${m.n1==='Por definir'?'':m.n1}" placeholder="Equipo 1" style="width:90px">
+      <span style="font-size:11px;color:var(--text3)">vs</span>
+      <input class="admin-input" id="adm-ko-t2-${m.id}" type="text" value="${m.t2==='❓'?'':m.t2}" placeholder="🏳️" style="width:44px">
+      <input class="admin-input" id="adm-ko-n2-${m.id}" type="text" value="${m.n2==='Por definir'?'':m.n2}" placeholder="Equipo 2" style="width:90px">
+      <button class="btn-admin" onclick="adminSetKnockoutTeams(${koPhase},'${m.id}')">Guardar</button>
     </div>` : '';
 
   return `<div class="match-card${finished?' finished':''}" id="mc-${m.id}">
@@ -833,7 +940,7 @@ function matchCardHTML(m, preds){
       </div>
     </div>
     <div class="match-meta"><span>📅 ${fmtDate(sd?.date||m.date)} ${sd?.time||m.time}</span><span>${lockStr} ${predSmall}</span></div>
-    ${resultRow}${adminRow}${adminLockControls}
+    ${resultRow}${adminRow}${adminLockControls}${adminScheduleRow}${adminKnockoutRow}
   </div>`;
 }
 
