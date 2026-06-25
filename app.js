@@ -408,6 +408,44 @@ async function adminSetKnockoutTeams(phase, mid){
   }catch(e){ console.error('adminSetKnockoutTeams error', e); alert('Error: '+(e?.message||String(e))); }
 }
 
+let unsubTournamentResults = null;
+
+function startRealtimeTournamentResults(){
+  // Cancela listener previo si existe
+  if(unsubTournamentResults) unsubTournamentResults();
+  import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js').then(({ doc, onSnapshot })=>{
+    unsubTournamentResults = onSnapshot(
+      doc(fbDb(), 'tournament', 'results'),
+      (snap) => {
+        const data = snap.exists() ? (snap.data()||{}) : {};
+        const freshResults = {};
+        const freshVetoed = {};
+        Object.entries(data).forEach(([mid, val])=>{
+          if(val && val.vetoed === true) freshVetoed[mid] = true;
+          else if(val) freshResults[mid] = val;
+        });
+        const merged = { ...(S.adminResults||{}), ...freshResults };
+        Object.keys(freshVetoed).forEach(mid => delete merged[mid]);
+        S.adminResults = merged;
+        S.vetoed = { ...(S.vetoed||{}), ...freshVetoed };
+        localStorage.setItem('wf26_admin_results', JSON.stringify(S.adminResults));
+        localStorage.setItem('wf26_vetoed', JSON.stringify(S.vetoed));
+        // Reconstruir S.results con los nuevos adminResults encima de los de la API
+        const apiBase = {};
+        Object.entries(S.results||{}).forEach(([mid, v])=>{
+          if(!S.adminResults[mid] && !S.vetoed[mid]) apiBase[mid] = v;
+        });
+        S.results = { ...apiBase, ...S.adminResults };
+        save();
+        renderPhaseBody();
+        renderPredTab();
+        renderRanking();
+      },
+      (err) => console.error('onSnapshot tournament/results error', err)
+    );
+  }).catch(e => console.error('startRealtimeTournamentResults import error', e));
+}
+
 async function startAutoUpdateResults(){
   console.log('[wf26] startAutoUpdateResults');
   if(autoResultsTimer) clearInterval(autoResultsTimer);
@@ -432,12 +470,17 @@ async function startAutoUpdateResults(){
     renderPhaseBody();
   }
 
+  // Listener en tiempo real para resultados admin — actualiza inmediatamente sin esperar polling
+  startRealtimeTournamentResults();
+
   autoResultsTimer = setInterval(async ()=>{
-    const next = await fetchResultsFromSheet();
+    // Esperar API y Firestore juntos para que el merge siempre use datos frescos
+    const [next] = await Promise.all([
+      fetchResultsFromSheet(),
+      fetchAdminResultsFromFirestore(),
+      fetchTournamentOverrides()
+    ]);
     if(!next) return;
-    // Refrescar admin results y overrides desde Firestore (en background)
-    fetchAdminResultsFromFirestore().catch(()=>{});
-    fetchTournamentOverrides().catch(()=>{});
     // Filtrar de la API los partidos vetados por admin antes del merge
     const apiResults = next.results || {};
     Object.keys(S.vetoed||{}).forEach(mid => delete apiResults[mid]);
@@ -469,7 +512,7 @@ async function startAutoUpdateResults(){
     renderPhaseBody();
     renderPredTab();
     renderRanking();
-  }, 60000);
+  }, 15000);
 }
 
 function showMain(){
