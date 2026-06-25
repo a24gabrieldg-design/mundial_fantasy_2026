@@ -414,13 +414,16 @@ async function adminSetKnockoutTeams(phase, mid){
   }catch(e){ console.error('adminSetKnockoutTeams error', e); alert('Error: '+(e?.message||String(e))); }
 }
 
-let unsubTournamentResults = null;
+const _unsubTournament = {};
 
-function startRealtimeTournamentResults(){
-  // Cancela listener previo si existe
-  if(unsubTournamentResults) unsubTournamentResults();
+function startRealtimeTournament(){
+  // Cancela listeners previos
+  Object.values(_unsubTournament).forEach(u => { try{ u(); }catch(e){} });
+
   import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js').then(({ doc, onSnapshot })=>{
-    unsubTournamentResults = onSnapshot(
+
+    // 1) Resultados admin
+    _unsubTournament.results = onSnapshot(
       doc(fbDb(), 'tournament', 'results'),
       (snap) => {
         const data = snap.exists() ? (snap.data()||{}) : {};
@@ -436,20 +439,67 @@ function startRealtimeTournamentResults(){
         S.vetoed = { ...(S.vetoed||{}), ...freshVetoed };
         localStorage.setItem('wf26_admin_results', JSON.stringify(S.adminResults));
         localStorage.setItem('wf26_vetoed', JSON.stringify(S.vetoed));
-        // Reconstruir S.results con los nuevos adminResults encima de los de la API
         const apiBase = {};
         Object.entries(S.results||{}).forEach(([mid, v])=>{
           if(!S.adminResults[mid] && !S.vetoed[mid]) apiBase[mid] = v;
         });
         S.results = { ...apiBase, ...S.adminResults };
-        save();
-        renderPhaseBody();
-        renderPredTab();
-        renderRanking();
+        save(); renderPhaseBody(); renderPredTab(); renderRanking();
       },
-      (err) => console.error('onSnapshot tournament/results error', err)
+      (err) => console.error('onSnapshot results error', err)
     );
-  }).catch(e => console.error('startRealtimeTournamentResults import error', e));
+
+    // 2) Lock overrides
+    _unsubTournament.locks = onSnapshot(
+      doc(fbDb(), 'tournament', 'lock_overrides'),
+      (snap) => {
+        S.lockOverrides = snap.exists() ? (snap.data()||{}) : {};
+        localStorage.setItem('wf26_lock_overrides', JSON.stringify(S.lockOverrides));
+        save(); renderPhaseBody();
+      },
+      (err) => console.error('onSnapshot lock_overrides error', err)
+    );
+
+    // 3) Schedule overrides
+    _unsubTournament.schedule = onSnapshot(
+      doc(fbDb(), 'tournament', 'schedule_overrides'),
+      (snap) => {
+        S.scheduleOverrides = snap.exists() ? (snap.data()||{}) : {};
+        localStorage.setItem('wf26_sched_overrides', JSON.stringify(S.scheduleOverrides));
+        // Merge con el schedule de la API
+        const apiSched = JSON.parse(localStorage.getItem('wf26_sched')||'{}');
+        S.schedule = { ...apiSched, ...S.scheduleOverrides };
+        save(); renderPhaseBody();
+      },
+      (err) => console.error('onSnapshot schedule_overrides error', err)
+    );
+
+    // 4) Knockout overrides
+    _unsubTournament.knockout = onSnapshot(
+      doc(fbDb(), 'tournament', 'knockout_overrides'),
+      (snap) => {
+        S.knockoutOverrides = snap.exists() ? (snap.data()||{}) : {};
+        localStorage.setItem('wf26_ko_overrides', JSON.stringify(S.knockoutOverrides));
+        Object.keys(S.knockoutOverrides).forEach(phase => {
+          S.knockoutMatches[phase] = S.knockoutOverrides[phase];
+        });
+        save(); renderPhaseBody();
+      },
+      (err) => console.error('onSnapshot knockout_overrides error', err)
+    );
+
+    // 5) Swapped matches
+    _unsubTournament.swapped = onSnapshot(
+      doc(fbDb(), 'tournament', 'swapped_matches'),
+      (snap) => {
+        S.swappedMatches = snap.exists() ? (snap.data()||{}) : {};
+        localStorage.setItem('wf26_swapped', JSON.stringify(S.swappedMatches));
+        save(); renderPhaseBody(); renderPredTab();
+      },
+      (err) => console.error('onSnapshot swapped_matches error', err)
+    );
+
+  }).catch(e => console.error('startRealtimeTournament import error', e));
 }
 
 async function startAutoUpdateResults(){
@@ -477,7 +527,7 @@ async function startAutoUpdateResults(){
   }
 
   // Listener en tiempo real para resultados admin — actualiza inmediatamente sin esperar polling
-  startRealtimeTournamentResults();
+  startRealtimeTournament();
 
   autoResultsTimer = setInterval(async ()=>{
     // Esperar API y Firestore juntos para que el merge siempre use datos frescos
