@@ -309,26 +309,18 @@ async function fetchResultsFromSheet(){
   }
 }
 
-// Carga resultados forzados y vetos del admin desde Firestore.
-// Actualiza S.adminResults y S.vetoed (ambos permanentes).
+// Carga resultados forzados y vetos del admin desde tournament/results (global, igual para todas las ligas).
 async function fetchAdminResultsFromFirestore(){
   try{
-    const { collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
-    const leagueCodes = Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
+    const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const snap = await getDoc(doc(fbDb(), 'tournament', 'results'));
+    const data = snap.exists() ? (snap.data()||{}) : {};
     const freshResults = {};
     const freshVetoed = {};
-    await Promise.all(leagueCodes.map(async code=>{
-      try{
-        const snaps = await getDocs(collection(fbDb(), 'leagues', code, 'results'));
-        snaps.forEach(d=>{
-          const data = d.data();
-          if(data.vetoed === true) freshVetoed[d.id] = true;
-          else freshResults[d.id] = data;
-        });
-      }catch(e){ /* sin permisos o vacio */ }
-    }));
-    // Merge conservando cache (por si una liga ya no está cargada)
-    // Pero si algo estaba como resultado y ahora está vetado, quitar del adminResults
+    Object.entries(data).forEach(([mid, val])=>{
+      if(val && val.vetoed === true) freshVetoed[mid] = true;
+      else if(val) freshResults[mid] = val;
+    });
     const merged = { ...(S.adminResults||{}), ...freshResults };
     Object.keys(freshVetoed).forEach(mid => delete merged[mid]);
     S.adminResults = merged;
@@ -979,11 +971,14 @@ async function adminSetResult(mid){
   if(g1===''||g2==='') return;
   if(!S.currentLeague) return;
   try{
-    const { doc, setDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const { doc, setDoc, getDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const rg = { g1: parseInt(g1), g2: parseInt(g2) };
 
-    // 1) Guardar resultado (merge:false para eliminar cualquier campo 'vetoed' previo)
-    await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'results', mid), rg, { merge: false });
+    // 1) Guardar resultado en tournament/results (global para todas las ligas)
+    const tournRef = doc(fbDb(), 'tournament', 'results');
+    const tournSnap = await getDoc(tournRef);
+    const tournExisting = tournSnap.exists() ? (tournSnap.data()||{}) : {};
+    await setDoc(tournRef, { ...tournExisting, [mid]: rg }, { merge: false });
 
     // 2) Recalcular points para TODAS las predicciones de la liga
     const predSnaps = await getDocs(collection(fbDb(), 'leagues', S.currentLeague, 'predictions'));
@@ -1052,10 +1047,13 @@ async function adminClearResult(mid){
   if(!S.currentLeague) return;
   if(!confirm('¿Borrar el resultado de este partido? Los puntos calculados se perderán.')) return;
   try{
-    const { doc, setDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const { doc, setDoc, getDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
 
-    // 1) Marcar como vetado en Firestore (veto = la API no puede sobreescribir este partido)
-    await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'results', mid), { vetoed: true }, { merge: false });
+    // 1) Marcar como vetado en tournament/results (global)
+    const tournRef2 = doc(fbDb(), 'tournament', 'results');
+    const tournSnap2 = await getDoc(tournRef2);
+    const tournExisting2 = tournSnap2.exists() ? (tournSnap2.data()||{}) : {};
+    await setDoc(tournRef2, { ...tournExisting2, [mid]: { vetoed: true } }, { merge: false });
 
     // 2) Limpiar el campo points de ese partido en todas las predicciones
     const predSnaps = await getDocs(collection(fbDb(), 'leagues', S.currentLeague, 'predictions'));
@@ -1091,9 +1089,10 @@ async function adminRecalc(mid){
   if(!S.currentLeague) return;
   try{
     const { doc, getDoc, setDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
-    const resSnap = await getDoc(doc(fbDb(), 'leagues', S.currentLeague, 'results', mid));
-    if(!resSnap.exists()) return;
-    const rg = resSnap.data()||{};
+    const resSnap = await getDoc(doc(fbDb(), 'tournament', 'results'));
+    const allResults = resSnap.exists() ? (resSnap.data()||{}) : {};
+    const rg = allResults[mid];
+    if(!rg || rg.vetoed) return;
     const predSnaps = await getDocs(collection(fbDb(), 'leagues', S.currentLeague, 'predictions'));
     await Promise.all(predSnaps.docs.map(async (dSnap)=>{
       const uid=dSnap.id, data=dSnap.data()||{};
