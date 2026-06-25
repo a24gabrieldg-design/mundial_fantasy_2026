@@ -34,6 +34,12 @@ const GROUP_TEAMS = {
   L:[{f:'🏴',n:'Inglaterra'},{f:'🇭🇷',n:'Croacia'},{f:'🇬🇭',n:'Ghana'},{f:'🇵🇦',n:'Panamá'}]
 };
 
+// Lista plana de todos los equipos del torneo (para desplegables admin)
+const ALL_TEAMS = Object.values(GROUP_TEAMS).flat().reduce((acc, t) => {
+  if(!acc.find(x => x.n === t.n)) acc.push(t);
+  return acc;
+}, []).sort((a, b) => a.n.localeCompare(b.n, 'es'));
+
 // Generate group matches
 // Fechas y horas en hora España peninsular (CEST, UTC+2)
 function makeGroupMatches(){
@@ -387,11 +393,13 @@ async function adminSetSchedule(mid){
 // Admin: definir los dos equipos de un partido de fase eliminatoria (cruces)
 async function adminSetKnockoutTeams(phase, mid){
   if(!isTotalAdmin()) return;
-  const n1 = document.getElementById('adm-ko-n1-'+mid)?.value?.trim();
-  const n2 = document.getElementById('adm-ko-n2-'+mid)?.value?.trim();
-  const t1 = document.getElementById('adm-ko-t1-'+mid)?.value?.trim() || '🏳️';
-  const t2 = document.getElementById('adm-ko-t2-'+mid)?.value?.trim() || '🏳️';
-  if(!n1 || !n2){ alert('Indica ambos equipos'); return; }
+  const n1 = document.getElementById('adm-ko-sel1-'+mid)?.value?.trim();
+  const n2 = document.getElementById('adm-ko-sel2-'+mid)?.value?.trim();
+  if(!n1 || !n2){ alert('Selecciona ambos equipos'); return; }
+  const team1 = ALL_TEAMS.find(t => t.n === n1);
+  const team2 = ALL_TEAMS.find(t => t.n === n2);
+  const t1 = team1?.f || '🏳️';
+  const t2 = team2?.f || '🏳️';
   try{
     const { doc, setDoc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const ref = doc(fbDb(), 'tournament', 'knockout_overrides');
@@ -936,6 +944,15 @@ function renderKOMatches(){
   const matches=S.knockoutMatches[S.currentPhase]||KNOCKOUT_TEMPLATES[S.currentPhase];
   const preds=((S.predictions[S.currentLeague]||{})[S.currentUser])||{};
   c.innerHTML=matches.map(m=>matchCardHTML(m,preds,true,S.currentPhase)).join('')+`<div class="save-indicator" id="save-ind"></div>`;
+  // Restaurar valores seleccionados en los desplegables de equipos
+  if(isTotalAdmin()){
+    matches.forEach(m=>{
+      const s1=document.getElementById('adm-ko-sel1-'+m.id);
+      const s2=document.getElementById('adm-ko-sel2-'+m.id);
+      if(s1 && m.n1 !== 'Por definir') s1.value = m.n1;
+      if(s2 && m.n2 !== 'Por definir') s2.value = m.n2;
+    });
+  }
 }
 
 async function adminSwapTeams(mid){
@@ -1057,15 +1074,24 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
       <button class="btn-admin" onclick="adminSetSchedule('${m.id}')">Guardar</button>
     </div>` : '';
 
+  const _koTeamOptions = ALL_TEAMS.map(t =>
+    `<option value="${t.n}" data-flag="${t.f}">${t.f} ${t.n}</option>`
+  ).join('');
+  const _ko1sel = m.n1 !== 'Por definir' ? m.n1 : '';
+  const _ko2sel = m.n2 !== 'Por definir' ? m.n2 : '';
   const adminKnockoutRow = (isTotalAdmin() && isKnockout) ? `
-    <div class="admin-row" style="flex-wrap:wrap">
-      <span style="font-size:10px;color:var(--admin);font-weight:700">EQUIPOS:</span>
-      <input class="admin-input" id="adm-ko-t1-${m.id}" type="text" value="${m.t1==='❓'?'':m.t1}" placeholder="🏳️" style="width:44px">
-      <input class="admin-input" id="adm-ko-n1-${m.id}" type="text" value="${m.n1==='Por definir'?'':m.n1}" placeholder="Equipo 1" style="width:90px">
-      <span style="font-size:11px;color:var(--text3)">vs</span>
-      <input class="admin-input" id="adm-ko-t2-${m.id}" type="text" value="${m.t2==='❓'?'':m.t2}" placeholder="🏳️" style="width:44px">
-      <input class="admin-input" id="adm-ko-n2-${m.id}" type="text" value="${m.n2==='Por definir'?'':m.n2}" placeholder="Equipo 2" style="width:90px">
-      <button class="btn-admin" onclick="adminSetKnockoutTeams(${koPhase},'${m.id}')">Guardar</button>
+    <div class="admin-row" style="flex-wrap:wrap;gap:6px">
+      <span style="font-size:10px;color:var(--admin);font-weight:700;width:100%">EQUIPOS:</span>
+      <select id="adm-ko-sel1-${m.id}" style="flex:1;min-width:120px;padding:6px 8px;border-radius:8px;background:var(--bg3);color:var(--text);border:1px solid var(--border);font-size:12px">
+        <option value="">— Local —</option>
+        ${_koTeamOptions}
+      </select>
+      <span style="font-size:11px;color:var(--text3);align-self:center">vs</span>
+      <select id="adm-ko-sel2-${m.id}" style="flex:1;min-width:120px;padding:6px 8px;border-radius:8px;background:var(--bg3);color:var(--text);border:1px solid var(--border);font-size:12px">
+        <option value="">— Visitante —</option>
+        ${_koTeamOptions}
+      </select>
+      <button class="btn-admin" onclick="adminSetKnockoutTeams(${koPhase},'${m.id}')" style="width:100%">Guardar cruce</button>
     </div>` : '';
 
   return `<div class="match-card${finished?' finished':''}" id="mc-${m.id}">
