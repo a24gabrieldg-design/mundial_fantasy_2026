@@ -22,7 +22,7 @@ const fbStorage = () => getFB().storage;
 const GROUP_TEAMS = {
   A:[{f:'🇲🇽',n:'México'},{f:'🇿🇦',n:'Sudáfrica'},{f:'🇰🇷',n:'Corea del Sur'},{f:'🇨🇿',n:'República Checa'}],
   B:[{f:'🇨🇦',n:'Canadá'},{f:'🇧🇦',n:'Bosnia y Herzegovina'},{f:'🇶🇦',n:'Qatar'},{f:'🇨🇭',n:'Suiza'}],
-  C:[{f:'🇧🇷',n:'Brasil'},{f:'🇲🇦',n:'Marruecos'},{f:'🇭🇹',n:'Haití'},{f:'🏴󠁧󠁢󠁳󠁣󠁴󠁿',n:'Escocia'}],
+  C:[{f:'🇧🇷',n:'Brasil'},{f:'🇲🇦',n:'Marruecos'},{f:'🇭🇹',n:'Haití'},{f:'🏴',n:'Escocia'}],
   D:[{f:'🇺🇸',n:'Estados Unidos'},{f:'🇵🇾',n:'Paraguay'},{f:'🇦🇺',n:'Australia'},{f:'🇹🇷',n:'Turquía'}],
   E:[{f:'🇩🇪',n:'Alemania'},{f:'🇨🇼',n:'Curazao'},{f:'🇨🇮',n:'Costa de Marfil'},{f:'🇪🇨',n:'Ecuador'}],
   F:[{f:'🇳🇱',n:'Países Bajos'},{f:'🇯🇵',n:'Japón'},{f:'🇸🇪',n:'Suecia'},{f:'🇹🇳',n:'Túnez'}],
@@ -31,7 +31,7 @@ const GROUP_TEAMS = {
   I:[{f:'🇫🇷',n:'Francia'},{f:'🇸🇳',n:'Senegal'},{f:'🇮🇶',n:'Irak'},{f:'🇳🇴',n:'Noruega'}],
   J:[{f:'🇦🇷',n:'Argentina'},{f:'🇩🇿',n:'Argelia'},{f:'🇦🇹',n:'Austria'},{f:'🇯🇴',n:'Jordania'}],
   K:[{f:'🇵🇹',n:'Portugal'},{f:'🇨🇩',n:'R.D. Congo'},{f:'🇺🇿',n:'Uzbekistán'},{f:'🇨🇴',n:'Colombia'}],
-  L:[{f:'🏴󠁧󠁢󠁥󠁮󠁧󠁿',n:'Inglaterra'},{f:'🇭🇷',n:'Croacia'},{f:'🇬🇭',n:'Ghana'},{f:'🇵🇦',n:'Panamá'}]
+  L:[{f:'🏴',n:'Inglaterra'},{f:'🇭🇷',n:'Croacia'},{f:'🇬🇭',n:'Ghana'},{f:'🇵🇦',n:'Panamá'}]
 };
 
 // Generate group matches
@@ -97,6 +97,8 @@ let S = {
   adminResults: JSON.parse(localStorage.getItem('wf26_admin_results')||'{}'),
   // partidos vetados por admin (borrados manualmente): la API no puede sobreescribirlos
   vetoed: JSON.parse(localStorage.getItem('wf26_vetoed')||'{}'),
+  // lock manual por admin { [mid]: '0'|'1' } — prioridad sobre tiempo; sincronizado con Firestore
+  lockOverrides: JSON.parse(localStorage.getItem('wf26_lock_overrides')||'{}'),
   // fecha/hora forzadas por admin (prioridad sobre la API): { [mid]: {date,time} }
   scheduleOverrides: JSON.parse(localStorage.getItem('wf26_sched_overrides')||'{}'),
   // emparejamientos de fases knockout definidos por admin (globales, no por liga): { [phase]: [matches] }
@@ -157,6 +159,7 @@ function save(){
   localStorage.setItem('wf26_sched',JSON.stringify(S.schedule||{}));
   localStorage.setItem('wf26_admin_results',JSON.stringify(S.adminResults||{}));
   localStorage.setItem('wf26_vetoed',JSON.stringify(S.vetoed||{}));
+  localStorage.setItem('wf26_lock_overrides',JSON.stringify(S.lockOverrides||{}));
   localStorage.setItem('wf26_sched_overrides',JSON.stringify(S.scheduleOverrides||{}));
   localStorage.setItem('wf26_ko_overrides',JSON.stringify(S.knockoutOverrides||{}));
 }
@@ -343,14 +346,17 @@ async function fetchAdminResultsFromFirestore(){
 async function fetchTournamentOverrides(){
   try{
     const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
-    const [schedSnap, koSnap] = await Promise.all([
+    const [schedSnap, koSnap, lockSnap] = await Promise.all([
       getDoc(doc(fbDb(), 'tournament', 'schedule_overrides')),
-      getDoc(doc(fbDb(), 'tournament', 'knockout_overrides'))
+      getDoc(doc(fbDb(), 'tournament', 'knockout_overrides')),
+      getDoc(doc(fbDb(), 'tournament', 'lock_overrides'))
     ]);
     S.scheduleOverrides = schedSnap.exists() ? (schedSnap.data()||{}) : (S.scheduleOverrides||{});
     S.knockoutOverrides = koSnap.exists() ? (koSnap.data()||{}) : (S.knockoutOverrides||{});
+    S.lockOverrides = lockSnap.exists() ? (lockSnap.data()||{}) : (S.lockOverrides||{});
     localStorage.setItem('wf26_sched_overrides', JSON.stringify(S.scheduleOverrides));
     localStorage.setItem('wf26_ko_overrides', JSON.stringify(S.knockoutOverrides));
+    localStorage.setItem('wf26_lock_overrides', JSON.stringify(S.lockOverrides));
   }catch(e){
     console.error('fetchTournamentOverrides error', e);
   }
@@ -851,12 +857,12 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
   const closeDt=new Date(matchDt.getTime()-5*60*1000);
   const now=new Date();
 
-  const forcedLockKey = `wf26_forced_lock_${m.id}`;
-  const forcedLockRaw = localStorage.getItem(forcedLockKey);
-  const hasForcedLock = forcedLockRaw !== null;
-  const forcedLock = hasForcedLock ? forcedLockRaw==='1' : null;
+  // S.lockOverrides (Firestore, global para todos) tiene prioridad; fallback localStorage
+  const lockOverrideVal = S.lockOverrides?.[m.id] ?? localStorage.getItem(`wf26_forced_lock_${m.id}`);
+  const hasForcedLock = lockOverrideVal !== null && lockOverrideVal !== undefined;
+  const forcedLock = hasForcedLock ? lockOverrideVal === '1' : null;
   const isClosedByTime = now>=closeDt||m.locked;
-  const locked = isTotalAdmin()&&hasForcedLock ? forcedLock : isClosedByTime;
+  const locked = hasForcedLock ? forcedLock : isClosedByTime;
   const res=S.results[m.id];
   const finished=!!res;
   const lockStr=locked?(finished?'✅ Finalizado':'🔒 Cerrado'):`⏰ Cierre: ${fmtTime(closeDt)}`;
@@ -1017,10 +1023,28 @@ async function adminSetResult(mid){
   }catch(e){ console.error('adminSetResult error', e); }
 }
 
-function forceToggleLock(mid, val){
-  const key=`wf26_forced_lock_${mid}`;
-  if(val==='clear') localStorage.removeItem(key);
-  else localStorage.setItem(key,val);
+async function forceToggleLock(mid, val){
+  try{
+    const { doc, getDoc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const ref = doc(fbDb(), 'tournament', 'lock_overrides');
+    const snap = await getDoc(ref);
+    const existing = snap.exists() ? (snap.data()||{}) : {};
+    let next;
+    if(val==='clear'){
+      next = { ...existing };
+      delete next[mid];
+    } else {
+      next = { ...existing, [mid]: val };
+    }
+    await setDoc(ref, next, { merge: false });
+    S.lockOverrides = next;
+    localStorage.setItem('wf26_lock_overrides', JSON.stringify(next));
+  }catch(e){
+    console.error('forceToggleLock error', e);
+    const key = `wf26_forced_lock_${mid}`;
+    if(val==='clear') localStorage.removeItem(key);
+    else localStorage.setItem(key, val);
+  }
   renderPredTab();
 }
 
