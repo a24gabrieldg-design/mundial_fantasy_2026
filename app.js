@@ -99,6 +99,8 @@ let S = {
   vetoed: JSON.parse(localStorage.getItem('wf26_vetoed')||'{}'),
   // lock manual por admin { [mid]: '0'|'1' } — prioridad sobre tiempo; sincronizado con Firestore
   lockOverrides: JSON.parse(localStorage.getItem('wf26_lock_overrides')||'{}'),
+  // partidos con equipos intercambiados por admin { [mid]: true }
+  swappedMatches: JSON.parse(localStorage.getItem('wf26_swapped')||'{}'),
   // fecha/hora forzadas por admin (prioridad sobre la API): { [mid]: {date,time} }
   scheduleOverrides: JSON.parse(localStorage.getItem('wf26_sched_overrides')||'{}'),
   // emparejamientos de fases knockout definidos por admin (globales, no por liga): { [phase]: [matches] }
@@ -160,6 +162,7 @@ function save(){
   localStorage.setItem('wf26_admin_results',JSON.stringify(S.adminResults||{}));
   localStorage.setItem('wf26_vetoed',JSON.stringify(S.vetoed||{}));
   localStorage.setItem('wf26_lock_overrides',JSON.stringify(S.lockOverrides||{}));
+  localStorage.setItem('wf26_swapped',JSON.stringify(S.swappedMatches||{}));
   localStorage.setItem('wf26_sched_overrides',JSON.stringify(S.scheduleOverrides||{}));
   localStorage.setItem('wf26_ko_overrides',JSON.stringify(S.knockoutOverrides||{}));
 }
@@ -338,17 +341,20 @@ async function fetchAdminResultsFromFirestore(){
 async function fetchTournamentOverrides(){
   try{
     const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
-    const [schedSnap, koSnap, lockSnap] = await Promise.all([
+    const [schedSnap, koSnap, lockSnap, swapSnap] = await Promise.all([
       getDoc(doc(fbDb(), 'tournament', 'schedule_overrides')),
       getDoc(doc(fbDb(), 'tournament', 'knockout_overrides')),
-      getDoc(doc(fbDb(), 'tournament', 'lock_overrides'))
+      getDoc(doc(fbDb(), 'tournament', 'lock_overrides')),
+      getDoc(doc(fbDb(), 'tournament', 'swapped_matches'))
     ]);
     S.scheduleOverrides = schedSnap.exists() ? (schedSnap.data()||{}) : (S.scheduleOverrides||{});
     S.knockoutOverrides = koSnap.exists() ? (koSnap.data()||{}) : (S.knockoutOverrides||{});
     S.lockOverrides = lockSnap.exists() ? (lockSnap.data()||{}) : (S.lockOverrides||{});
+    S.swappedMatches = swapSnap.exists() ? (swapSnap.data()||{}) : (S.swappedMatches||{});
     localStorage.setItem('wf26_sched_overrides', JSON.stringify(S.scheduleOverrides));
     localStorage.setItem('wf26_ko_overrides', JSON.stringify(S.knockoutOverrides));
     localStorage.setItem('wf26_lock_overrides', JSON.stringify(S.lockOverrides));
+    localStorage.setItem('wf26_swapped', JSON.stringify(S.swappedMatches));
   }catch(e){
     console.error('fetchTournamentOverrides error', e);
   }
@@ -882,8 +888,50 @@ function renderKOMatches(){
   c.innerHTML=matches.map(m=>matchCardHTML(m,preds,true,S.currentPhase)).join('')+`<div class="save-indicator" id="save-ind"></div>`;
 }
 
+async function adminSwapTeams(mid){
+  if(!isTotalAdmin()) return;
+  try{
+    const { doc, getDoc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const ref = doc(fbDb(), 'tournament', 'swapped_matches');
+    const snap = await getDoc(ref);
+    const existing = snap.exists() ? (snap.data()||{}) : {};
+    // Toggle: si ya estaba swapped, lo quitamos; si no, lo añadimos
+    const next = { ...existing };
+    if(next[mid]) delete next[mid];
+    else next[mid] = true;
+    await setDoc(ref, next, { merge: false });
+    S.swappedMatches = next;
+    localStorage.setItem('wf26_swapped', JSON.stringify(next));
+    // Si hay resultado guardado, también intercambiar g1/g2 en tournament/results
+    if(S.adminResults[mid]){
+      const resRef = doc(fbDb(), 'tournament', 'results');
+      const resSnap = await getDoc(resRef);
+      const resExisting = resSnap.exists() ? (resSnap.data()||{}) : {};
+      const r = resExisting[mid];
+      if(r && !r.vetoed){
+        const flipped = { g1: r.g2, g2: r.g1 };
+        await setDoc(resRef, { ...resExisting, [mid]: flipped }, { merge: false });
+        S.adminResults[mid] = flipped;
+        S.results[mid] = flipped;
+        localStorage.setItem('wf26_admin_results', JSON.stringify(S.adminResults));
+      }
+    }
+    save();
+    renderPhaseBody();
+    const ind = document.getElementById('save-ind');
+    if(ind){ ind.textContent = next[mid] ? '🔄 Equipos intercambiados' : '🔄 Intercambio deshecho'; setTimeout(()=>{ if(ind) ind.textContent=''; }, 2000); }
+  }catch(e){ console.error('adminSwapTeams error', e); alert('Error: '+(e?.message||String(e))); }
+}
+
 function matchCardHTML(m, preds, isKnockout, koPhase){
+  // Aplicar swap si el admin lo ha marcado (intercambia local y visitante)
+  const isSwapped = !!(S.swappedMatches?.[m.id]);
+  const mDisplay = isSwapped
+    ? { ...m, t1:m.t2, n1:m.n2, t2:m.t1, n2:m.n1 }
+    : m;
   const p=preds[m.id]||{g1:'',g2:''};
+  // Si swapped, también invertir la predicción mostrada y el resultado
+  const pDisplay = isSwapped ? { g1: p.g2??'', g2: p.g1??'' } : p;
   const sd = S.schedule?.[m.id];
   const matchDtParts = (sd?.date||m.date).split('-');
   const [Y,M,D] = matchDtParts;
@@ -898,20 +946,22 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
   const forcedLock = hasForcedLock ? lockOverrideVal === '1' : null;
   const isClosedByTime = now>=closeDt||m.locked;
   const locked = hasForcedLock ? forcedLock : isClosedByTime;
-  const res=S.results[m.id];
+  const resRaw=S.results[m.id];
+  // Si swapped, invertir g1/g2 del resultado para mostrar correctamente
+  const res = resRaw && isSwapped ? { g1: resRaw.g2, g2: resRaw.g1 } : resRaw;
   const finished=!!res;
   const lockStr=locked?(finished?'✅ Finalizado':'🔒 Cerrado'):`⏰ Cierre: ${fmtTime(closeDt)}`;
   const showPredictionClosedUi = locked&&!finished;
-  const predSmall = finished ? `<span class="pred-small">+${calcPoints(res,p)} pts</span>` : '';
+  const predSmall = finished ? `<span class="pred-small">+${calcPoints(res,pDisplay)} pts</span>` : '';
   // Cuando está cerrado: mostrar la predicción real del usuario (solo disabled), no 0-0
   const predForUiClosed = p;
 
   let resultRow='';
   if(finished){
-    const myPts=calcPoints(res,p);
+    const myPts=calcPoints(res,pDisplay);
     resultRow=`<div class="result-row">
       <span class="result-real">Real: ${res.g1} - ${res.g2}</span>
-      <span class="result-pred">Tu pred: ${p.g1!==''?p.g1:'?'} - ${p.g2!==''?p.g2:'?'}</span>
+      <span class="result-pred">Tu pred: ${pDisplay.g1!==''?pDisplay.g1:'?'} - ${pDisplay.g2!==''?pDisplay.g2:'?'}</span>
       <span class="result-pts">+${myPts} pts</span>
     </div>`;
     if(S.currentLeague){
@@ -919,8 +969,9 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
       const rivalsData=league.members.filter(mb=>mb!==S.currentUser).map(mb=>{
         const rp=((S.predictions[S.currentLeague]||{})[mb])||{};
         const rpr=rp[m.id]||{g1:'',g2:''};
-        const rpts=calcPoints(res,rpr);
-        return `<div class="rival-row"><span class="rival-name">${getDisplayName(mb)}</span><span class="rival-pred">${rpr.g1!==''?rpr.g1:'?'} - ${rpr.g2!==''?rpr.g2:'?'}</span><span class="rival-pts">+${rpts}</span></div>`;
+        const rprDisplay = isSwapped ? { g1: rpr.g2??'', g2: rpr.g1??'' } : rpr;
+        const rpts=calcPoints(res,rprDisplay);
+        return `<div class="rival-row"><span class="rival-name">${getDisplayName(mb)}</span><span class="rival-pred">${rprDisplay.g1!==''?rprDisplay.g1:'?'} - ${rprDisplay.g2!==''?rprDisplay.g2:'?'}</span><span class="rival-pts">+${rpts}</span></div>`;
       }).join('');
       if(rivalsData) resultRow+=`<button class="rivals-btn" onclick="toggleRivals('${m.id}')">👥 Ver predicciones rivales</button><div class="rivals-panel" id="rv-${m.id}">${rivalsData}</div>`;
     }
@@ -942,6 +993,7 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
   const adminLockControls = isTotalAdmin() ? `
     <div class="admin-lock-controls">
       <button class="btn-admin" onclick="adminClearResult('${m.id}')" style="border-color:#ef4444;color:#ef4444">Borrar resultado</button>
+      <button class="btn-admin" onclick="adminSwapTeams('${m.id}')" style="border-color:#a78bfa;color:#a78bfa">${isSwapped?'↩ Deshacer swap':'🔄 Intercambiar'}</button>
       <button class="btn-admin" onclick="forceToggleLock('${m.id}','0')" style="border-color:var(--success);color:var(--success)">Reabrir</button>
       <button class="btn-admin" onclick="forceToggleLock('${m.id}','1')">Cerrar</button>
       <button class="btn-admin" onclick="forceToggleLock('${m.id}','clear')">Reset</button>
@@ -969,15 +1021,15 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
   return `<div class="match-card${finished?' finished':''}" id="mc-${m.id}">
     <div class="match-row">
       <div class="team-side">
-        <span class="team-flag">${m.t1}</span>
-        <span class="team-name">${m.n1}</span>
-        <input class="score-input" type="number" min="0" max="20" value="${predForUiClosed?predForUiClosed.g1:p.g1}" id="pred-${m.id}-1" ${locked?'disabled':''} oninput="savePred('${m.id}')">
+        <span class="team-flag">${mDisplay.t1}</span>
+        <span class="team-name">${mDisplay.n1}</span>
+        <input class="score-input" type="number" min="0" max="20" value="${predForUiClosed?pDisplay.g1:pDisplay.g1}" id="pred-${m.id}-1" ${locked?'disabled':''} oninput="savePred('${m.id}')">
       </div>
       <span class="score-sep"> - </span>
       <div class="team-side right">
-        <span class="team-flag">${m.t2}</span>
-        <span class="team-name">${m.n2}</span>
-        <input class="score-input" type="number" min="0" max="20" value="${predForUiClosed?predForUiClosed.g2:p.g2}" id="pred-${m.id}-2" ${locked?'disabled':''} oninput="savePred('${m.id}')">
+        <span class="team-flag">${mDisplay.t2}</span>
+        <span class="team-name">${mDisplay.n2}</span>
+        <input class="score-input" type="number" min="0" max="20" value="${predForUiClosed?pDisplay.g2:pDisplay.g2}" id="pred-${m.id}-2" ${locked?'disabled':''} oninput="savePred('${m.id}')">
       </div>
     </div>
     <div class="match-meta"><span>📅 ${fmtDate(sd?.date||m.date)} ${sd?.time||m.time}</span><span>${lockStr} ${predSmall}</span></div>
