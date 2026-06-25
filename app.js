@@ -114,7 +114,8 @@ let S = {
   currentUser: localStorage.getItem('wf26_cu')||null,
   currentPhase: 0,
   currentGroup: 'A',
-  currentLeague: null
+  currentLeague: null,
+  predViewMode: localStorage.getItem('wf26_pred_view')||'group' // 'group' | 'date'
 };
 
 // Si cambias de usuario sin recargar, fuerza recargar estado del nuevo UID
@@ -168,6 +169,7 @@ function save(){
   localStorage.setItem('wf26_admin_results',JSON.stringify(S.adminResults||{}));
   localStorage.setItem('wf26_vetoed',JSON.stringify(S.vetoed||{}));
   localStorage.setItem('wf26_lock_overrides',JSON.stringify(S.lockOverrides||{}));
+  if(S.predViewMode) localStorage.setItem('wf26_pred_view', S.predViewMode);
   localStorage.setItem('wf26_swapped',JSON.stringify(S.swappedMatches||{}));
   localStorage.setItem('wf26_sched_overrides',JSON.stringify(S.scheduleOverrides||{}));
   localStorage.setItem('wf26_ko_overrides',JSON.stringify(S.knockoutOverrides||{}));
@@ -415,6 +417,21 @@ async function adminSetKnockoutTeams(phase, mid){
     S.knockoutOverrides = next;
     S.knockoutMatches[phase] = updatedPhase;
     localStorage.setItem('wf26_ko_overrides', JSON.stringify(next));
+
+    // Auto-abrir el partido si ambos equipos están definidos
+    if(n1 && n2){
+      const lockRef = doc(fbDb(), 'tournament', 'lock_overrides');
+      const lockSnap = await getDoc(lockRef);
+      const lockExisting = lockSnap.exists() ? (lockSnap.data()||{}) : {};
+      // Solo abrir si no hay un lock manual previo
+      if(lockExisting[mid] !== '1'){
+        const lockNext = { ...lockExisting, [mid]: '0' };
+        await setDoc(lockRef, lockNext, { merge: false });
+        S.lockOverrides = lockNext;
+        localStorage.setItem('wf26_lock_overrides', JSON.stringify(lockNext));
+      }
+    }
+
     save();
     renderPhaseBody();
     const ind = document.getElementById('save-ind');
@@ -885,25 +902,94 @@ async function renderPredTab(){
   const memberUids = [...new Set([...(league.members||[]), S.currentUser])];
   await ensureLeaguePredictionsLoaded(S.currentLeague, memberUids);
 
+  const isDateView = S.predViewMode === 'date';
   inner.innerHTML=`<div style="padding:0 0 0">
     <div style="padding:10px 14px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
       <span style="font-size:11px;color:var(--text2)">Liga:</span>
       <button class="league-sel-btn" onclick="openModal('pick-league')"><span class="league-sel-name">${league.name}</span> ▾</button>
     </div>
+    <div style="display:flex;gap:0;border-bottom:1px solid var(--border)">
+      <button onclick="setPredViewMode('group')" style="flex:1;padding:9px 0;font-size:12px;font-weight:700;border:none;cursor:pointer;background:${!isDateView?'var(--primary)':'var(--bg2)'};color:${!isDateView?'#fff':'var(--text2)'};border-radius:0;transition:all .2s">Por grupos</button>
+      <button onclick="setPredViewMode('date')" style="flex:1;padding:9px 0;font-size:12px;font-weight:700;border:none;cursor:pointer;background:${isDateView?'var(--primary)':'var(--bg2)'};color:${isDateView?'#fff':'var(--text2)'};border-radius:0;transition:all .2s">Por fecha</button>
+    </div>
+    ${!isDateView ? `
     <div class="phase-selector" id="phase-sel">
       <button class="phase-arrow" id="phase-prev" onclick="changePhase(-1)">‹</button>
       <div class="phase-name" id="phase-name">${PHASES[S.currentPhase]}</div>
       <button class="phase-arrow" id="phase-next" onclick="changePhase(1)">›</button>
-    </div>
+    </div>` : ''}
     <div id="phase-body"></div>
   </div>`;
   renderPhaseBody();
 }
 
+function renderMatchesByDate(){
+  const body = document.getElementById('phase-body'); if(!body) return;
+  const preds = ((S.predictions[S.currentLeague]||{})[S.currentUser])||{};
+
+  // Recopilar TODOS los partidos: grupos + fases KO
+  const allMatches = [];
+
+  // Grupos
+  GROUPS.forEach(g => {
+    (MATCHES_GROUP[g]||[]).forEach(m => {
+      const sd = S.schedule?.[m.id];
+      const date = sd?.date || m.date;
+      const time = sd?.time || m.time;
+      allMatches.push({ ...m, _date: date, _time: time, _label: 'Grupo ' + g });
+    });
+  });
+
+  // Fases eliminatorias
+  const koPhaseLabels = { 1:'Octavos de Final', 2:'Cuartos de Final', 3:'Semifinales', 4:'Final' };
+  [1,2,3,4].forEach(phase => {
+    const koMatches = S.knockoutMatches[phase] || KNOCKOUT_TEMPLATES[phase];
+    koMatches.forEach(m => {
+      const sd = S.schedule?.[m.id];
+      const date = sd?.date || m.date;
+      const time = sd?.time || m.time;
+      allMatches.push({ ...m, _date: date, _time: time, _label: koPhaseLabels[phase] });
+    });
+  });
+
+  // Ordenar por fecha y hora
+  allMatches.sort((a, b) => {
+    const da = a._date + 'T' + a._time;
+    const db = b._date + 'T' + b._time;
+    return da < db ? -1 : da > db ? 1 : 0;
+  });
+
+  // Agrupar por fecha
+  const byDate = {};
+  allMatches.forEach(m => {
+    if(!byDate[m._date]) byDate[m._date] = [];
+    byDate[m._date].push(m);
+  });
+
+  let html = '';
+  Object.keys(byDate).sort().forEach(date => {
+    const [y, mo, d] = date.split('-');
+    const label = new Date(Number(y), Number(mo)-1, Number(d))
+      .toLocaleDateString('es-ES', { weekday:'long', day:'numeric', month:'long' });
+    html += `<div class="group-header" style="text-transform:capitalize">${label}</div>`;
+    html += byDate[date].map(m => {
+      // Pasar _label como info extra en el partido para mostrarlo en la tarjeta
+      return matchCardHTML({ ...m, _phaseLabel: m._label }, preds, m._label !== 'Fase de Grupos'? true:false, null);
+    }).join('');
+  });
+  html += `<div class="save-indicator" id="save-ind"></div>`;
+  body.innerHTML = html;
+}
+
 function changePhase(d){ S.currentPhase=Math.max(0,Math.min(4,S.currentPhase+d)); renderPredTab(); }
+function setPredViewMode(mode){ S.predViewMode=mode; localStorage.setItem('wf26_pred_view',mode); renderPredTab(); }
 
 function renderPhaseBody(){
   const body=document.getElementById('phase-body'); if(!body) return;
+  if(S.predViewMode==='date'){
+    renderMatchesByDate();
+    return;
+  }
   document.getElementById('phase-prev').disabled=S.currentPhase===0;
   document.getElementById('phase-next').disabled=S.currentPhase===4;
   if(S.currentPhase===0){
@@ -1108,7 +1194,7 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
         <input class="score-input" type="number" min="0" max="20" value="${predForUiClosed?pDisplay.g2:pDisplay.g2}" id="pred-${m.id}-2" ${locked?'disabled':''} oninput="savePred('${m.id}')">
       </div>
     </div>
-    <div class="match-meta"><span>📅 ${fmtDate(sd?.date||m.date)} ${sd?.time||m.time}</span><span>${lockStr} ${predSmall}</span></div>
+    <div class="match-meta"><span>📅 ${fmtDate(sd?.date||m.date)} ${sd?.time||m.time}${m._phaseLabel?` · <span style="color:var(--text2);font-size:10px">${m._phaseLabel}</span>`:''}</span><span>${lockStr} ${predSmall}</span></div>
     ${resultRow}${adminRow}${adminLockControls}${adminScheduleRow}${adminKnockoutRow}
   </div>`;
 }
