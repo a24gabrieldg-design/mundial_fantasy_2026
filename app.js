@@ -614,10 +614,11 @@ function goTab(name,idx){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
   document.getElementById('nav-'+idx).classList.add('active');
-  const titles=['Mis Ligas','Predicciones','Clasificación','Información'];
+  const titles=['Mis Ligas','Predicciones','Grupos','Tabla','Información'];
   document.getElementById('top-bar-title').textContent=titles[idx];
   if(name==='ligas') renderLeagues();
   if(name==='preds') renderPredTab();
+  if(name==='grupos') renderGruposTab();
   if(name==='tabla') renderRanking();
   if(name==='info') renderProfileInfo();
 }
@@ -1003,6 +1004,17 @@ function renderMatchesByDate(){
     `<div class="group-header" style="text-transform:capitalize">${dayHeaderLabel_(S.currentDateTab)}</div>` +
     listHtml +
     `<div class="save-indicator" id="save-ind"></div>`;
+
+  // Centrar el tab del día seleccionado en la barra de scroll
+  requestAnimationFrame(() => {
+    const tabsEl = body.querySelector('.group-tabs');
+    const activeTab = body.querySelector('.group-tab.active');
+    if(tabsEl && activeTab){
+      const tabsCenter = tabsEl.offsetWidth / 2;
+      const activeCenter = activeTab.offsetLeft + activeTab.offsetWidth / 2;
+      tabsEl.scrollLeft = activeCenter - tabsCenter;
+    }
+  });
 }
 
 // Etiqueta corta de un día: Hoy / Mañana / Ayer / "11 Jun" — se recalcula según la fecha real del dispositivo
@@ -1503,17 +1515,7 @@ async function renderRanking(){
   const filtersEl=document.getElementById('ranking-filters');
   if(!listEl||!filtersEl) return;
 
-  const isGroupsView = S.rankingViewMode === 'grupos';
-
-  filtersEl.innerHTML = `
-    <button class="filter-btn${!isGroupsView?' active':''}" onclick="setRankingViewMode('liga')" style="flex:1">🏆 Mi Liga</button>
-    <button class="filter-btn${isGroupsView?' active':''}" onclick="setRankingViewMode('grupos')" style="flex:1">⚽ Clasificación</button>
-  `;
-
-  if(isGroupsView){
-    renderGroupStandingsView(listEl);
-    return;
-  }
+  filtersEl.innerHTML = '';
 
   // desplegable: liga seleccionada
   const eligibleCodes = Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
@@ -1668,7 +1670,7 @@ function standingsRowHTML_(t, pos, qualifiedSet, extraLabel){
     <div class="standing-team">
       <span class="standing-pos">${pos}</span>
       <span class="standing-flag">${t.flag}</span>
-      <span class="standing-name">${t.name}${extraLabel?` <span style="color:var(--text3);font-weight:500">${extraLabel}</span>`:''}</span>
+      <span class="standing-name">${t.name}</span>${extraLabel?`<span class="standing-group-label">${extraLabel}</span>`:''}
     </div>
     <div class="standing-stats">
       <span class="st-pts">${t.pts}</span>
@@ -1715,7 +1717,36 @@ function renderGroupStandingsView(listEl){
 
 function selectStandingsGroup(g){
   S.currentStandingsGroup = g;
-  renderRanking().catch(()=>{});
+  renderGruposTab();
+}
+
+// ===== TAB GRUPOS (clasificación real de equipos) =====
+function renderGruposTab(){
+  const listEl = document.getElementById('grupos-list');
+  if(!listEl) return;
+  if(!S.currentStandingsGroup) S.currentStandingsGroup = 'A';
+  const tabs = [...GROUPS, 'BEST3'];
+  const tabsHtml = `<div class="group-tabs">${tabs.map(g=>
+    `<div class="group-tab${g===S.currentStandingsGroup?' active':''}" onclick="selectStandingsGroup('${g}')">${g==='BEST3'?'3os':g}</div>`
+  ).join('')}</div>`;
+
+  const qualified = computeQualifiedTeams();
+  const bodyHtml = S.currentStandingsGroup === 'BEST3'
+    ? renderBestThirdsTable(qualified)
+    : renderGroupTable(S.currentStandingsGroup, qualified);
+
+  listEl.innerHTML = tabsHtml + bodyHtml;
+
+  // Centrar tab activo
+  requestAnimationFrame(() => {
+    const tabsEl = listEl.querySelector('.group-tabs');
+    const activeTab = listEl.querySelector('.group-tab.active');
+    if(tabsEl && activeTab){
+      const tabsCenter = tabsEl.offsetWidth / 2;
+      const activeCenter = activeTab.offsetLeft + activeTab.offsetWidth / 2;
+      tabsEl.scrollLeft = activeCenter - tabsCenter;
+    }
+  });
 }
 
 // ===== PREDICCIONES (Firestore -> cache local) =====
