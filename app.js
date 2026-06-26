@@ -115,7 +115,10 @@ let S = {
   currentPhase: 0,
   currentGroup: 'A',
   currentLeague: null,
-  predViewMode: localStorage.getItem('wf26_pred_view')||'group' // 'group' | 'date'
+  predViewMode: localStorage.getItem('wf26_pred_view')||'group', // 'group' | 'date'
+  currentDateTab: null, // fecha seleccionada (YYYY-MM-DD) en modo "Por fecha"
+  rankingViewMode: localStorage.getItem('wf26_ranking_view')||'liga', // 'liga' | 'grupos'
+  currentStandingsGroup: 'A' // grupo (o 'BEST3') seleccionado en la Clasificación de grupos
 };
 
 // Si cambias de usuario sin recargar, fuerza recargar estado del nuevo UID
@@ -965,24 +968,75 @@ function renderMatchesByDate(){
     if(!byDate[m._date]) byDate[m._date] = [];
     byDate[m._date].push(m);
   });
+  const sortedDates = Object.keys(byDate).sort();
 
-  let html = '';
-  Object.keys(byDate).sort().forEach(date => {
-    const [y, mo, d] = date.split('-');
-    const label = new Date(Number(y), Number(mo)-1, Number(d))
-      .toLocaleDateString('es-ES', { weekday:'long', day:'numeric', month:'long' });
-    html += `<div class="group-header" style="text-transform:capitalize">${label}</div>`;
-    html += byDate[date].map(m => {
-      // Pasar _label como info extra en el partido para mostrarlo en la tarjeta
-      return matchCardHTML({ ...m, _phaseLabel: m._label }, preds, m._label !== 'Fase de Grupos'? true:false, null);
-    }).join('');
-  });
-  html += `<div class="save-indicator" id="save-ind"></div>`;
-  body.innerHTML = html;
+  if(!sortedDates.length){
+    body.innerHTML = `<div class="empty-state"><div class="ei">📅</div><p>No hay partidos programados</p></div>`;
+    return;
+  }
+
+  // Día por defecto: el de hoy (real). Si no hay partidos hoy, el próximo día disponible,
+  // y si el torneo ya terminó, el último día disponible. Se recalcula cada vez que se entra
+  // de nuevo en el modo "Por fecha" (ver setPredViewMode), pero el usuario puede moverse libremente.
+  if(!S.currentDateTab || !byDate[S.currentDateTab]){
+    const today = new Date(); today.setHours(0,0,0,0);
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+    if(byDate[todayStr]){
+      S.currentDateTab = todayStr;
+    } else {
+      const upcoming = sortedDates.find(d => d >= todayStr);
+      S.currentDateTab = upcoming || sortedDates[sortedDates.length-1];
+    }
+  }
+
+  const tabsHtml = `<div class="group-tabs">${sortedDates.map(d=>
+    `<div class="group-tab${d===S.currentDateTab?' active':''}" onclick="selectDateTab('${d}')">${dayShortLabel_(d)}</div>`
+  ).join('')}</div>`;
+
+  const dayMatches = byDate[S.currentDateTab] || [];
+  const listHtml = dayMatches.map(m => {
+    // Pasar _label como info extra en el partido para mostrarlo en la tarjeta
+    return matchCardHTML({ ...m, _phaseLabel: m._label }, preds, m._label !== 'Fase de Grupos'? true:false, null);
+  }).join('');
+
+  body.innerHTML = tabsHtml +
+    `<div class="group-header" style="text-transform:capitalize">${dayHeaderLabel_(S.currentDateTab)}</div>` +
+    listHtml +
+    `<div class="save-indicator" id="save-ind"></div>`;
+}
+
+// Etiqueta corta de un día: Hoy / Mañana / Ayer / "11 Jun" — se recalcula según la fecha real del dispositivo
+function dayShortLabel_(dateStr){
+  const today = new Date(); today.setHours(0,0,0,0);
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const dObj = new Date(y, m-1, d);
+  const diffDays = Math.round((dObj - today) / 86400000);
+  if(diffDays === 0) return 'Hoy';
+  if(diffDays === 1) return 'Mañana';
+  if(diffDays === -1) return 'Ayer';
+  return fmtDate(dateStr);
+}
+
+// Etiqueta de cabecera para el día seleccionado (combina Hoy/Mañana/Ayer con la fecha completa)
+function dayHeaderLabel_(dateStr){
+  const short = dayShortLabel_(dateStr);
+  if(short==='Hoy'||short==='Mañana'||short==='Ayer') return `${short} · ${fmtDate(dateStr)}`;
+  return short;
+}
+
+function selectDateTab(d){
+  S.currentDateTab = d;
+  renderMatchesByDate();
 }
 
 function changePhase(d){ S.currentPhase=Math.max(0,Math.min(4,S.currentPhase+d)); renderPredTab(); }
-function setPredViewMode(mode){ S.predViewMode=mode; localStorage.setItem('wf26_pred_view',mode); renderPredTab(); }
+function setPredViewMode(mode){
+  S.predViewMode=mode;
+  localStorage.setItem('wf26_pred_view',mode);
+  // Al entrar en modo "Por fecha" siempre se abre por defecto en el día de hoy
+  if(mode==='date') S.currentDateTab=null;
+  renderPredTab();
+}
 
 function renderPhaseBody(){
   const body=document.getElementById('phase-body'); if(!body) return;
@@ -1449,13 +1503,24 @@ async function renderRanking(){
   const filtersEl=document.getElementById('ranking-filters');
   if(!listEl||!filtersEl) return;
 
+  const isGroupsView = S.rankingViewMode === 'grupos';
+
+  filtersEl.innerHTML = `
+    <button class="filter-btn${!isGroupsView?' active':''}" onclick="setRankingViewMode('liga')" style="flex:1">🏆 Mi Liga</button>
+    <button class="filter-btn${isGroupsView?' active':''}" onclick="setRankingViewMode('grupos')" style="flex:1">⚽ Clasificación</button>
+  `;
+
+  if(isGroupsView){
+    renderGroupStandingsView(listEl);
+    return;
+  }
+
   // desplegable: liga seleccionada
   const eligibleCodes = Object.keys(S.leagues||{}).filter(c=>S.leagues[c]);
   const selected = (S.currentLeague && S.leagues && S.leagues[S.currentLeague]) ? S.currentLeague : (eligibleCodes[0] || null);
 
   // si no hay selección válida, ocultar tabla
   if(!selected){
-    filtersEl.innerHTML='';
     listEl.innerHTML=`<div class="empty-state"><div class="ei">📊</div><p>Únete a una liga para ver la tabla</p></div>`;
     return;
   }
@@ -1463,23 +1528,6 @@ async function renderRanking(){
   // Si no hay selección guardada, dejarla en un valor válido
   if(!S.currentLeague || !S.leagues?.[S.currentLeague]){
     S.currentLeague = selected;
-  }
-
-  filtersEl.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 0;">
-      <div style="font-size:12px;color:var(--text2);white-space:nowrap;">Liga:</div>
-      <select id="ranking-league-select" onchange="setRankingLeague(this.value)" style="flex:1;padding:8px 10px;border-radius:10px;background:var(--bg3);color:var(--text);border:1px solid var(--border);">
-        ${eligibleCodes.map(code=>{
-          const l=S.leagues[code];
-          return `<option value="${code}" ${code===selected?'selected':''}>${l?.name||code}</option>`;
-        }).join('')}
-      </select>
-    </div>
-  `;
-
-  function setRankingLeague(code){
-    S.currentLeague = code;
-    renderRanking().catch(()=>{});
   }
 
   const selectedLeague = S.leagues[selected];
@@ -1495,7 +1543,17 @@ async function renderRanking(){
   }));
   scores.sort((a,b)=>b.pts-a.pts);
 
-  let html=`<div class="rank-league-label">${selectedLeague.name}</div>`;
+  let html = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 0 10px;">
+      <div style="font-size:12px;color:var(--text2);white-space:nowrap;">Liga:</div>
+      <select id="ranking-league-select" onchange="setRankingLeague(this.value)" style="flex:1;padding:8px 10px;border-radius:10px;background:var(--bg3);color:var(--text);border:1px solid var(--border);">
+        ${eligibleCodes.map(code=>{
+          const l=S.leagues[code];
+          return `<option value="${code}" ${code===selected?'selected':''}>${l?.name||code}</option>`;
+        }).join('')}
+      </select>
+    </div>
+    <div class="rank-league-label">${selectedLeague.name}</div>`;
   scores.forEach((s,i)=>{
     const posC=i===0?'gold':i===1?'silver':i===2?'bronze':'';
     const posI=i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1;
@@ -1504,6 +1562,160 @@ async function renderRanking(){
     html+=`<div class="rank-item${isMe?' me':''}"><div class="rank-pos ${posC}">${posI}</div><div class="rank-avatar">${av}</div><div class="rank-name">${s.name}${isMe?' (Tú)':''}</div><div class="rank-pts">${s.pts}</div></div>`;
   });
   listEl.innerHTML=html;
+}
+
+function setRankingViewMode(mode){
+  S.rankingViewMode = mode;
+  localStorage.setItem('wf26_ranking_view', mode);
+  renderRanking().catch(()=>{});
+}
+
+function setRankingLeague(code){
+  S.currentLeague = code;
+  renderRanking().catch(()=>{});
+}
+
+// ===== CLASIFICACIÓN DE GRUPOS (equipos) =====
+
+// Calcula la tabla de un grupo a partir de los resultados finales guardados en S.results.
+// Orden: puntos > resultado directo (entre los dos equipos empatados) > diferencia de goles > goles a favor.
+function computeGroupStandings(group){
+  const teams = GROUP_TEAMS[group] || [];
+  const stats = {};
+  teams.forEach(t => {
+    stats[t.n] = { name:t.n, flag:t.f, pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0 };
+  });
+  const matches = MATCHES_GROUP[group] || [];
+  const h2h = {};
+  matches.forEach(m => {
+    const res = S.results?.[m.id];
+    if(!res) return;
+    const g1 = Number(res.g1), g2 = Number(res.g2);
+    if(!isFinite(g1) || !isFinite(g2)) return;
+    const s1 = stats[m.n1], s2 = stats[m.n2];
+    if(!s1 || !s2) return;
+    s1.pj++; s2.pj++;
+    s1.gf += g1; s1.gc += g2;
+    s2.gf += g2; s2.gc += g1;
+    if(g1 > g2){ s1.pg++; s1.pts += 3; s2.pp++; }
+    else if(g2 > g1){ s2.pg++; s2.pts += 3; s1.pp++; }
+    else { s1.pe++; s2.pe++; s1.pts += 1; s2.pts += 1; }
+    h2h[m.n1+'__'+m.n2] = { gf:g1, gc:g2 };
+    h2h[m.n2+'__'+m.n1] = { gf:g2, gc:g1 };
+  });
+  const list = Object.values(stats);
+  list.sort((a,b)=>{
+    if(b.pts !== a.pts) return b.pts - a.pts;
+    const direct = h2h[a.name+'__'+b.name];
+    if(direct){
+      const diff = direct.gf - direct.gc; // >0 = a ganó a b en el cara a cara
+      if(diff !== 0) return -diff;
+    }
+    const dgA = a.gf - a.gc, dgB = b.gf - b.gc;
+    if(dgB !== dgA) return dgB - dgA;
+    if(b.gf !== a.gf) return b.gf - a.gf;
+    return 0;
+  });
+  return list;
+}
+
+function computeAllGroupStandings(){
+  const map = {};
+  GROUPS.forEach(g => { map[g] = computeGroupStandings(g); });
+  return map;
+}
+
+// Ranking de las terceras de cada grupo: puntos > diferencia de goles > goles a favor (no hay resultado directo posible, son de grupos distintos)
+function computeBestThirds(allStandings){
+  const thirds = GROUPS.map(g => {
+    const t = (allStandings[g] || [])[2];
+    return t ? { ...t, group:g } : null;
+  }).filter(Boolean);
+  thirds.sort((a,b)=>{
+    if(b.pts !== a.pts) return b.pts - a.pts;
+    const dgA = a.gf - a.gc, dgB = b.gf - b.gc;
+    if(dgB !== dgA) return dgB - dgA;
+    if(b.gf !== a.gf) return b.gf - a.gf;
+    return 0;
+  });
+  return thirds;
+}
+
+// Devuelve el set de nombres de equipo clasificados: 1º y 2º de cada grupo + las 8 mejores terceras
+function computeQualifiedTeams(){
+  const all = computeAllGroupStandings();
+  const thirds = computeBestThirds(all);
+  const qualifiedThirdNames = new Set(thirds.slice(0,8).map(t=>t.name));
+  const qualified = new Set();
+  GROUPS.forEach(g=>{
+    const st = all[g] || [];
+    if(st[0]) qualified.add(st[0].name);
+    if(st[1]) qualified.add(st[1].name);
+    if(st[2] && qualifiedThirdNames.has(st[2].name)) qualified.add(st[2].name);
+  });
+  return qualified;
+}
+
+function standingsHeaderHTML_(){
+  return `<div class="standings-header"><span class="sh-team">Equipo</span><span class="sh-stats"><span>Pts</span><span>PJ</span><span>PG</span><span>PE</span><span>PP</span><span>GF</span><span>GC</span><span>DG</span></span></div>`;
+}
+
+function standingsRowHTML_(t, pos, qualifiedSet, extraLabel){
+  const dg = t.gf - t.gc;
+  const dgStr = dg > 0 ? `+${dg}` : `${dg}`;
+  const cls = qualifiedSet.has(t.name) ? 'qualified' : 'eliminated';
+  return `<div class="standing-row ${cls}">
+    <div class="standing-team">
+      <span class="standing-pos">${pos}</span>
+      <span class="standing-flag">${t.flag}</span>
+      <span class="standing-name">${t.name}${extraLabel?` <span style="color:var(--text3);font-weight:500">${extraLabel}</span>`:''}</span>
+    </div>
+    <div class="standing-stats">
+      <span class="st-pts">${t.pts}</span>
+      <span>${t.pj}</span>
+      <span>${t.pg}</span>
+      <span>${t.pe}</span>
+      <span>${t.pp}</span>
+      <span>${t.gf}</span>
+      <span>${t.gc}</span>
+      <span>${dgStr}</span>
+    </div>
+  </div>`;
+}
+
+function renderGroupTable(group, qualifiedSet){
+  const standings = computeGroupStandings(group);
+  let html = `<div class="group-header">Grupo ${group}</div>` + standingsHeaderHTML_();
+  standings.forEach((t,i)=>{ html += standingsRowHTML_(t, i+1, qualifiedSet, null); });
+  return html;
+}
+
+function renderBestThirdsTable(qualifiedSet){
+  const all = computeAllGroupStandings();
+  const thirds = computeBestThirds(all);
+  let html = `<div class="group-header">Mejores Terceras</div>` + standingsHeaderHTML_();
+  thirds.forEach((t,i)=>{ html += standingsRowHTML_(t, i+1, qualifiedSet, `(${t.group})`); });
+  return html;
+}
+
+function renderGroupStandingsView(listEl){
+  if(!S.currentStandingsGroup) S.currentStandingsGroup = 'A';
+  const tabs = [...GROUPS, 'BEST3'];
+  const tabsHtml = `<div class="group-tabs">${tabs.map(g=>
+    `<div class="group-tab${g===S.currentStandingsGroup?' active':''}" onclick="selectStandingsGroup('${g}')">${g==='BEST3'?'3os':g}</div>`
+  ).join('')}</div>`;
+
+  const qualified = computeQualifiedTeams();
+  const bodyHtml = S.currentStandingsGroup === 'BEST3'
+    ? renderBestThirdsTable(qualified)
+    : renderGroupTable(S.currentStandingsGroup, qualified);
+
+  listEl.innerHTML = tabsHtml + bodyHtml;
+}
+
+function selectStandingsGroup(g){
+  S.currentStandingsGroup = g;
+  renderRanking().catch(()=>{});
 }
 
 // ===== PREDICCIONES (Firestore -> cache local) =====
