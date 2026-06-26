@@ -49,13 +49,15 @@ body{background:var(--bg);color:var(--text);min-height:100vh;display:flex;justif
 
 .main-content::-webkit-scrollbar{width:0}
 .bottom-nav{background:var(--bg2);border-top:1px solid var(--border);display:flex;padding:8px 0 16px;flex-shrink:0;z-index:20}
-.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;padding:5px 0;transition:all .2s;position:relative}
-.nav-icon{font-size:20px;color:var(--text3);transition:all .2s}
-.nav-label{font-size:10px;color:var(--text3);font-weight:500;transition:all .2s}
+.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;padding:5px 0;transition:all .2s;position:relative}
+.nav-icon{font-size:18px;color:var(--text3);transition:all .2s}
+.nav-label{font-size:9px;color:var(--text3);font-weight:500;transition:all .2s;white-space:nowrap}
 .nav-item.active .nav-icon,.nav-item.active .nav-label{color:var(--primary)}
 .nav-item.active::before{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:20px;height:2px;background:var(--primary);border-radius:0 0 2px 2px}
 .tab-page{display:none;padding:14px}
 .tab-page.active{display:block}
+/* El tab de grupos y tabla tienen su propio padding interno */
+#tab-grupos,#tab-tabla{padding:0}
 /* LIGAS */
 .action-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px}
 .btn-action{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px 10px;cursor:pointer;transition:all .2s;text-align:center}
@@ -218,6 +220,7 @@ body{background:var(--bg);color:var(--text);min-height:100vh;display:flex;justif
 .standing-pos{font-size:11px;font-weight:700;color:var(--text2);width:14px;flex-shrink:0;text-align:center}
 .standing-flag{font-size:15px;flex-shrink:0}
 .standing-name{font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+.standing-group-label{font-size:10px;font-weight:500;color:var(--text3);flex-shrink:0;white-space:nowrap}
 .standing-stats{flex:1;display:flex;align-items:center;min-width:0}
 .standing-stats span{flex:1;text-align:center;font-size:10px;color:var(--text2);font-weight:600}
 .standing-stats .st-pts{font-weight:800;color:var(--gold)}
