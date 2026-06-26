@@ -205,3 +205,19 @@ body{background:var(--bg);color:var(--text);min-height:100vh;display:flex;justif
 
 /* Estado “cerrado sin resultado”: badge limpio */
 .pred-small{display:inline-flex;align-items:center;justify-content:center;min-width:42px;padding:4px 8px;border-radius:999px;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.25);color:var(--success);font-size:11px;font-weight:800;letter-spacing:.5px;transform:translateY(-1px)}
+
+/* CLASIFICACIÓN DE GRUPOS (equipos) */
+.standings-header{display:flex;align-items:center;padding:6px 10px 4px;font-size:9px;color:var(--text3);font-weight:700;letter-spacing:.3px;text-transform:uppercase}
+.standings-header .sh-team{width:34%;flex-shrink:0}
+.standings-header .sh-stats{flex:1;display:flex}
+.standings-header .sh-stats span{flex:1;text-align:center}
+.standing-row{display:flex;align-items:center;border-radius:var(--radius-sm);margin:0 0 6px;padding:8px;border:1px solid var(--border)}
+.standing-row.qualified{background:rgba(34,197,94,0.16);border-color:rgba(34,197,94,0.35)}
+.standing-row.eliminated{background:rgba(239,68,68,0.14);border-color:rgba(239,68,68,0.3)}
+.standing-team{width:34%;flex-shrink:0;display:flex;align-items:center;gap:5px;min-width:0}
+.standing-pos{font-size:11px;font-weight:700;color:var(--text2);width:14px;flex-shrink:0;text-align:center}
+.standing-flag{font-size:15px;flex-shrink:0}
+.standing-name{font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+.standing-stats{flex:1;display:flex;align-items:center;min-width:0}
+.standing-stats span{flex:1;text-align:center;font-size:10px;color:var(--text2);font-weight:600}
+.standing-stats .st-pts{font-weight:800;color:var(--gold)}
