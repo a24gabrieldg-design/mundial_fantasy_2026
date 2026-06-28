@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="styles.css">
+
+  <!-- Firebase (Camino A: CDN + type=module) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
+    import { getAuth } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js";
+    import { getFirestore } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js";
+    import { getStorage } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-storage.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDgQu1BvD-iLMnvsmNVlkgOSPumI9ZLGcA",
+      authDomain: "mundial-275e0.firebaseapp.com",
+      projectId: "mundial-275e0",
+      storageBucket: "mundial-275e0.firebasestorage.app",
+      messagingSenderId: "1098963171418",
+      appId: "1:1098963171418:web:8e2ae392370be931190063",
+      measurementId: "G-HH9J5JJYQC"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    window.__FIREBASE__ = {
+      app,
+      auth: getAuth(app),
+      db: getFirestore(app),
+      storage: getStorage(app)
+    };
+    window.dispatchEvent(new Event('firebase-ready'));
+  </script>
+</head>
+<body>
+  <div id="app">
+    <div class="watermark">gabiidubraa</div>
+
+    <!-- AUTH -->
+    <div id="auth-screen" class="screen active">
+      <div class="auth-bg"></div>
+      <div class="auth-logo">
+        <div class="trophy">🏆</div>
+        <h1>MUNDIAL FANTASY</h1>
+        <p>USA · Canada · México 2026</p>
+      </div>
+      <div class="auth-card">
+        <div class="auth-tabs">
+          <div class="auth-tab active" onclick="switchAuthTab('login')">Iniciar sesión</div>
+          <div class="auth-tab" onclick="switchAuthTab('register')">Registrarse</div>
+        </div>
+<div id="login-form">
+          <div class="auth-field"><label>Email</label><input type="email" id="login-email" placeholder="tu@email.com"></div>
+          <div class="auth-field"><label>Contraseña</label><input type="password" id="login-pass" placeholder="••••••••"></div>
+
+          <button class="btn-primary" onclick="doLogin()">Entrar</button>
+          <div class="auth-error" id="login-err"></div>
+        </div>
+<div id="register-form" style="display:none">
+          <div class="auth-field"><label>Nombre</label><input type="text" id="reg-firstname" placeholder="¿Cómo te llamas?"></div>
+          <div class="auth-field"><label>Email</label><input type="email" id="reg-email" placeholder="tu@email.com"></div>
+          <div class="auth-field"><label>Contraseña</label><input type="password" id="reg-pass" placeholder="Mínimo 4 caracteres"></div>
+          <button class="btn-primary" onclick="doRegister()">Crear cuenta</button>
+          <div class="auth-error" id="reg-err"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MAIN -->
+    <div id="main-screen" class="screen">
+      <div class="top-bar" id="top-bar">
+        <div>
+          <div class="top-bar-title" id="top-bar-title">Mis Ligas</div>
+          <div class="top-bar-sub" id="top-bar-sub">MUNDIAL 2026</div>
+        </div>
+        <div id="top-bar-right"></div>
+      </div>
+      <div class="main-content">
+        <!-- LIGAS -->
+        <div class="tab-page active" id="tab-ligas">
+          <div class="action-btns">
+            <div class="btn-action" onclick="openModal('create-league')">
+              <div class="ba-icon">➕</div><div class="ba-title">Crear liga</div><div class="ba-sub">Nueva liga privada</div>
+            </div>
+            <div class="btn-action" onclick="openModal('join-league')">
+              <div class="ba-icon">🔑</div><div class="ba-title">Unirse</div><div class="ba-sub">Con código de liga</div>
+            </div>
+          </div>
+          <div class="section-title">Mis ligas</div>
+          <div id="leagues-list"></div>
+        </div>
+
+        <!-- PREDICCIONES -->
+        <div class="tab-page" id="tab-preds">
+          <div id="pred-inner"></div>
+        </div>
+
+        <!-- GRUPOS -->
+        <div class="tab-page" id="tab-grupos">
+          <div id="grupos-list" class="ranking-list"></div>
+        </div>
+
+        <!-- TABLA -->
+        <div class="tab-page" id="tab-tabla">
+          <div class="ranking-filters" id="ranking-filters"></div>
+          <div id="ranking-list" class="ranking-list"></div>
+        </div>
+
+        <!-- INFO -->
+        <div class="tab-page" id="tab-info">
+          <div class="info-content">
+            <div class="wcb"><div style="font-size:36px">⚽</div><div class="wcb-text"><h2>FIFA World Cup 2026</h2><p>USA · Canada · México · 48 equipos</p></div></div>
+            <div class="info-card">
+              <div class="info-card-title">🏅 Sistema de puntuación</div>
+              <table class="score-table">
+                <tr><td class="desc" colspan="2" style="font-size:11px;color:var(--text2);padding-bottom:4px">🏟️ Todos los partidos</td></tr>
+                <tr><td class="desc">Resultado exacto</td><td class="pts">7 pts</td></tr>
+                <tr><td class="desc">Acertar el ganador y los goles de un solo equipo (no exacto)</td><td class="pts">4 pts</td></tr>
+                <tr><td class="desc">Acertar el ganador, sin acertar goles de ningún equipo</td><td class="pts">2 pts</td></tr>
+                <tr><td class="desc">Acertar los goles de un equipo (sin exacto)</td><td class="pts">1 pt</td></tr>
+                <tr><td class="desc" colspan="2" style="font-size:11px;color:var(--text2);padding-top:10px;padding-bottom:4px">⚔️ Partidos eliminatorios (si predices empate)</td></tr>
+                <tr><td class="desc">Aciertas quién pasa Y cómo (prórroga o penaltis)</td><td class="pts">10 pts</td></tr>
+                <tr><td class="desc">Aciertas quién pasa (ganador en prórroga/penaltis)</td><td class="pts">8 pts</td></tr>
+                <tr><td class="desc" colspan="2" style="font-size:11px;color:var(--text2);padding-top:10px;padding-bottom:4px">⚔️ Partidos eliminatorios (si predices empate distinto al real)</td></tr>
+                <tr><td class="desc">Aciertas quién pasa Y cómo</td><td class="pts">6 pts</td></tr>
+                <tr><td class="desc">Aciertas quién pasa (ej: predices 0-0, real 1-1)</td><td class="pts">3 pts</td></tr>
+              </table>
+            </div>
+            <div class="info-card">
+              <div class="info-card-title">👤 Mi perfil</div>
+              <div class="profile-section">
+                <div class="profile-avatar-big" id="profile-avatar-big">
+                  <span id="profile-avatar-emoji">😎</span>
+                  <input type="file" accept="image/*" onchange="updateProfilePic(this)">
+                </div>
+                <div style="font-size:15px;font-weight:700" id="profile-username-display"></div>
+                <div style="font-size:11px;color:var(--text2)">Toca la foto para cambiarla</div>
+                <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+                  <input id="profile-firstname-edit" type="text" placeholder="Tu nombre" style="flex:1;min-width:140px; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:transparent; color:var(--text);" />
+                  <button class="btn-primary" style="padding:10px 12px;" onclick="saveProfileFirstName()">Guardar</button>
+                </div>
+              </div>
+            </div>
+            <div class="info-card">
+              <div class="info-card-title">📋 Reglas</div>
+              <div style="font-size:12px;color:var(--text2);line-height:1.8">
+                <p>• Las predicciones cierran <strong style="color:var(--text)">5 minutos</strong> antes del inicio del partido.</p>
+                <p>• Si dejas un marcador en blanco, solo se puntúa el campo que rellenaste.</p>
+                <p>• Los rivales solo se pueden ver cuando el partido ya cerró.</p>
+                <p>• Las fases eliminatorias se desbloquean conforme avanza el torneo.</p>
+                <p>• Las predicciones son <strong style="color:var(--text)">por liga</strong>: cada liga es independiente.</p>
+              </div>
+            </div>
+            <button class="btn-danger" onclick="doLogout()">🚪 Cerrar sesión</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="bottom-nav">
+        <div class="nav-item active" onclick="goTab('ligas',0)" id="nav-0"><span class="nav-icon">🏆</span><span class="nav-label">Ligas</span></div>
+        <div class="nav-item" onclick="goTab('preds',1)" id="nav-1"><span class="nav-icon">⚽</span><span class="nav-label">Predicciones</span></div>
+        <div class="nav-item" onclick="goTab('grupos',2)" id="nav-2"><span class="nav-icon">🌍</span><span class="nav-label">Grupos</span></div>
+        <div class="nav-item" onclick="goTab('tabla',3)" id="nav-3"><span class="nav-icon">📊</span><span class="nav-label">Tabla</span></div>
+        <div class="nav-item" onclick="goTab('info',4)" id="nav-4"><span class="nav-icon">ℹ️</span><span class="nav-label">Info</span></div>
+      </div>
+    </div>
+
+    <!-- MODAL (USUARIO / LIGA) -->
+    <div id="modal-overlay" style="display:none" class="modal-overlay" onclick="closeModalBg(event)">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div id="modal-content"></div>
+      </div>
+    </div>
+
+    <!-- MODAL ADMIN GLOBAL -->
+    <div id="admin-overlay" style="display:none" class="modal-overlay" onclick="closeAdminModalBg(event)">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-handle"></div>
+        <div id="admin-modal-content"></div>
+      </div>
+    </div>
+  </div>
+
+
+		<script src="app.js?v=3"></script>
+<script>
+  // Evita que al abrir como file:// por doble click falle el acceso a endpoints.
+  // Si estás en file://, mostramos una pista clara.
+  if (location.protocol === 'file:') {
+    console.warn('[wf26] Abriendo como file://; usa Live Server para que funcione el fetch del schedule.');
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#111;color:#fff;padding:10px 14px;font-size:12px;z-index:9999;border-bottom:1px solid rgba(255,255,255,0.2)';
+    el.textContent = 'Abre index.html desde un servidor (Live Server / http://localhost). Si lo abres con doble click (file://) las llamadas de red pueden fallar y la hora se verá mal.';
+    document.body.appendChild(el);
+  }
+</script>
+</body>
+</html>
