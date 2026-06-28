@@ -22,7 +22,7 @@ const fbStorage = () => getFB().storage;
 const GROUP_TEAMS = {
   A:[{f:'🇲🇽',n:'México'},{f:'🇿🇦',n:'Sudáfrica'},{f:'🇰🇷',n:'Corea del Sur'},{f:'🇨🇿',n:'República Checa'}],
   B:[{f:'🇨🇦',n:'Canadá'},{f:'🇧🇦',n:'Bosnia y Herzegovina'},{f:'🇶🇦',n:'Qatar'},{f:'🇨🇭',n:'Suiza'}],
-  C:[{f:'🇧🇷',n:'Brasil'},{f:'🇲🇦',n:'Marruecos'},{f:'🇭🇹',n:'Haití'},{f:'🏴󠁧󠁢󠁳󠁣󠁴󠁿',n:'Escocia'}],
+  C:[{f:'🇧🇷',n:'Brasil'},{f:'🇲🇦',n:'Marruecos'},{f:'🇭🇹',n:'Haití'},{f:'🏴',n:'Escocia'}],
   D:[{f:'🇺🇸',n:'Estados Unidos'},{f:'🇵🇾',n:'Paraguay'},{f:'🇦🇺',n:'Australia'},{f:'🇹🇷',n:'Turquía'}],
   E:[{f:'🇩🇪',n:'Alemania'},{f:'🇨🇼',n:'Curazao'},{f:'🇨🇮',n:'Costa de Marfil'},{f:'🇪🇨',n:'Ecuador'}],
   F:[{f:'🇳🇱',n:'Países Bajos'},{f:'🇯🇵',n:'Japón'},{f:'🇸🇪',n:'Suecia'},{f:'🇹🇳',n:'Túnez'}],
@@ -31,7 +31,7 @@ const GROUP_TEAMS = {
   I:[{f:'🇫🇷',n:'Francia'},{f:'🇸🇳',n:'Senegal'},{f:'🇮🇶',n:'Irak'},{f:'🇳🇴',n:'Noruega'}],
   J:[{f:'🇦🇷',n:'Argentina'},{f:'🇩🇿',n:'Argelia'},{f:'🇦🇹',n:'Austria'},{f:'🇯🇴',n:'Jordania'}],
   K:[{f:'🇵🇹',n:'Portugal'},{f:'🇨🇩',n:'R.D. Congo'},{f:'🇺🇿',n:'Uzbekistán'},{f:'🇨🇴',n:'Colombia'}],
-  L:[{f:'🏴󠁧󠁢󠁥󠁮󠁧󠁿',n:'Inglaterra'},{f:'🇭🇷',n:'Croacia'},{f:'🇬🇭',n:'Ghana'},{f:'🇵🇦',n:'Panamá'}]
+  L:[{f:'🏴',n:'Inglaterra'},{f:'🇭🇷',n:'Croacia'},{f:'🇬🇭',n:'Ghana'},{f:'🇵🇦',n:'Panamá'}]
 };
 
 // Lista plana de todos los equipos del torneo (para desplegables admin)
@@ -1229,8 +1229,6 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
   const _koTeamOptions = ALL_TEAMS.map(t =>
     `<option value="${t.n}" data-flag="${t.f}">${t.f} ${t.n}</option>`
   ).join('');
-  const _ko1sel = m.n1 !== 'Por definir' ? m.n1 : '';
-  const _ko2sel = m.n2 !== 'Por definir' ? m.n2 : '';
   const adminKnockoutRow = (isTotalAdmin() && isKnockout) ? `
     <div class="admin-row" style="flex-wrap:wrap;gap:6px">
       <span style="font-size:10px;color:var(--admin);font-weight:700;width:100%">EQUIPOS:</span>
@@ -1435,13 +1433,43 @@ async function adminRecalc(mid){
   }catch(e){ console.error('adminRecalc error', e); }
 }
 
-function calcPoints(res, pred){
+function calcPoints(res, pred, mid){
   if(!res) return 0;
   const rg1=parseInt(res.g1), rg2=parseInt(res.g2);
   const pg1=pred.g1!==''&&pred.g1!==undefined&&pred.g1!==null?parseInt(pred.g1):null;
   const pg2=pred.g2!==''&&pred.g2!==undefined&&pred.g2!==null?parseInt(pred.g2):null;
+
+  // ===== R16: lógica especial si 90' empata =====
+  const isR16 = mid && String(mid).startsWith('R16_');
+  const decidedBy = res.decidedBy || null; // 'ET' | 'PEN' | 'REG'
+  const isDraw90 = rg1===rg2;
+
+  if(isR16 && isDraw90){
+    // Si el usuario eligió ganador + momento, puntuar 8/10
+    const userWinner = pred.r16_winner || null; // '1'|'2'
+    const userDecidedBy = pred.r16_decidedBy || null; // 'ET'|'PEN'
+
+    if(!userWinner || !userDecidedBy) return 0;
+
+    // El ganador correcto depende del decidedBy + los goles de 90'
+    // En esta implementación, decidedBy indica el tipo de resolución (ET o PEN)
+    // y el ganador real es el equipo que el admin marque implícitamente en chosenWinner del documento.
+    // Para no inventar otro campo, deducimos el ganador desde res.r16_winner si existe, si no => 0.
+    const realWinner = res.r16_winner ? String(res.r16_winner) : '0'; // '1'|'2'
+    if(realWinner==='0') return 0;
+
+    let pts = 0;
+    if(String(userWinner)===String(realWinner)){
+      pts = 8;
+      if(String(userDecidedBy)===String(decidedBy)) pts = 10;
+    }
+    return pts;
+  }
+
+  // Compatibilidad: reglas antiguas para el resto o si no hay empate
   if(pg1===null||pg2===null) return 0;
   if(pg1===rg1&&pg2===rg2) return 7;
+
   const realWinner=rg1>rg2?1:(rg2>rg1?2:0);
   const predWinner=pg1>pg2?1:(pg2>pg1?2:0);
   const acertaGanador=predWinner===realWinner;
@@ -1462,7 +1490,7 @@ function getUserPts(user, leagueCode){
     if(mid === '_totalPts') return acc;
     const res = S.results?.[mid];
     if(!res) return acc;
-    return acc + calcPoints(res, p);
+return acc + calcPoints(res, p, mid);
   }, 0);
 }
 
