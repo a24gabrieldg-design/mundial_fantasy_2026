@@ -1,5 +1,5 @@
 // ===== DATA =====
-const PHASES = ['Fase de Grupos','Dieciseisavos de Final','Cuartos de Final','Semifinales','Final'];
+const PHASES = ['Fase de Grupos','Dieciseisavos de Final','Octavos de Final','Cuartos de Final','Semifinales','3er y 4to Puesto','Final'];
 const GROUPS = ['A','B','C','D','E','F','G','H','I','J','K','L'];
 
 const ADMIN_RESULT_DEFAULTS = {
@@ -75,10 +75,12 @@ function makeGroupMatches(){
 const MATCHES_GROUP = makeGroupMatches();
 
 const KNOCKOUT_TEMPLATES = {
-  1: Array.from({length:16},(_,i)=>({id:`R16_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-06-29',time:'18:00',locked:true})),
-  2: Array.from({length:8},(_,i)=>({id:`QF_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-04',time:'18:00',locked:true})),
-  3: Array.from({length:4},(_,i)=>({id:`SF_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-14',time:'18:00',locked:true})),
-  4: [{id:'FIN_1',n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-19',time:'18:00',locked:true}]
+  1: Array.from({length:32},(_,i)=>({id:`R32_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-06-27',time:'18:00',locked:true})),
+  2: Array.from({length:16},(_,i)=>({id:`R16_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-04',time:'18:00',locked:true})),
+  3: Array.from({length:8},(_,i)=>({id:`QF_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-11',time:'18:00',locked:true})),
+  4: Array.from({length:4},(_,i)=>({id:`SF_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-14',time:'18:00',locked:true})),
+  5: [{id:'TPP_1',n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-18',time:'18:00',locked:true}],
+  6: [{id:'FIN_1',n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-19',time:'18:00',locked:true}]
 };
 
 function storageKey_(uid, key){
@@ -945,8 +947,8 @@ function renderMatchesByDate(){
   });
 
   // Fases eliminatorias
-  const koPhaseLabels = { 1:'Dieciseisavos de Final', 2:'Cuartos de Final', 3:'Semifinales', 4:'Final' };
-  [1,2,3,4].forEach(phase => {
+  const koPhaseLabels = { 1:'Dieciseisavos de Final', 2:'Octavos de Final', 3:'Cuartos de Final', 4:'Semifinales', 5:'3er y 4to Puesto', 6:'Final' };
+  [1,2,3,4,5,6].forEach(phase => {
     const koMatches = S.knockoutMatches[phase] || KNOCKOUT_TEMPLATES[phase];
     koMatches.forEach(m => {
       const sd = S.schedule?.[m.id];
@@ -997,7 +999,7 @@ function renderMatchesByDate(){
   const dayMatches = byDate[S.currentDateTab] || [];
   const listHtml = dayMatches.map(m => {
     // Pasar _label como info extra en el partido para mostrarlo en la tarjeta
-    const koPhaseMap = {'Dieciseisavos de Final':1,'Cuartos de Final':2,'Semifinales':3,'Final':4};
+    const koPhaseMap = {'Dieciseisavos de Final':1,'Octavos de Final':2,'Cuartos de Final':3,'Semifinales':4,'3er y 4to Puesto':5,'Final':6};
     const mKoPhase = koPhaseMap[m._label] || null;
     return matchCardHTML({ ...m, _phaseLabel: m._label }, preds, m._label !== 'Fase de Grupos', mKoPhase);
   }).join('');
@@ -1043,7 +1045,7 @@ function selectDateTab(d){
   renderMatchesByDate();
 }
 
-function changePhase(d){ S.currentPhase=Math.max(0,Math.min(4,S.currentPhase+d)); renderPredTab(); }
+function changePhase(d){ S.currentPhase=Math.max(0,Math.min(6,S.currentPhase+d)); renderPredTab(); }
 function setPredViewMode(mode){
   S.predViewMode=mode;
   localStorage.setItem('wf26_pred_view',mode);
@@ -1059,13 +1061,14 @@ function renderPhaseBody(){
     return;
   }
   document.getElementById('phase-prev').disabled=S.currentPhase===0;
-  document.getElementById('phase-next').disabled=S.currentPhase===4;
+  document.getElementById('phase-next').disabled=S.currentPhase===6;
   if(S.currentPhase===0){
     const tabsHtml=`<div class="group-tabs">${GROUPS.map(g=>`<div class="group-tab${g===S.currentGroup?' active':''}" onclick="selectGroup('${g}')">${g}</div>`).join('')}</div>`;
     body.innerHTML=tabsHtml+`<div id="gmatches"></div>`;
     renderGroupMatchList();
   } else {
-    const unlockDt=new Date(['','2026-06-29','2026-07-04','2026-07-12','2026-07-19'][S.currentPhase]+'T00:00:00');
+    const unlockDates = ['','2026-06-27','2026-07-04','2026-07-11','2026-07-14','2026-07-18','2026-07-19'];
+    const unlockDt=new Date(unlockDates[S.currentPhase]+'T00:00:00');
     const now=new Date(); const diff=unlockDt-now;
     const koMatches=S.knockoutMatches[S.currentPhase]||KNOCKOUT_TEMPLATES[S.currentPhase];
     const allDefined=koMatches.some(m=>m.n1!=='Por definir');
@@ -1145,28 +1148,32 @@ async function adminSwapTeams(mid){
 }
 
 function matchCardHTML(m, preds, isKnockout, koPhase){
+  const isR16 = String(m.id||'').startsWith('R16_') || String(m.id||'').startsWith('R32_');
+
   // Aplicar swap si el admin lo ha marcado (intercambia local y visitante)
   const isSwapped = !!(S.swappedMatches?.[m.id]);
   const mDisplay = isSwapped
     ? { ...m, t1:m.t2, n1:m.n2, t2:m.t1, n2:m.n1 }
     : m;
 
-  const isKO = isKnockout || String(m.id||'').match(/^(R16_|QF_|SF_|FIN_)/);
-
   // Resultado real, invirtiendo g1/g2 si el partido está swapped
   const resRaw = S.results[m.id];
   const res = resRaw && isSwapped ? { ...resRaw, g1: resRaw.g2, g2: resRaw.g1 } : resRaw;
   const finished = !!res;
 
-  const isDraw90 = isKO && finished && Number(res?.g1)===Number(res?.g2);
+  const realDraw90 = isKnockout && finished && Number(res?.g1)===Number(res?.g2);
   const decidedBy = res?.decidedBy || null; // 'ET' | 'PEN'
   const realWinner = res?.r16_winner ? String(res.r16_winner) : null; // '1'|'2'
 
   const p=preds[m.id]||{g1:'',g2:''};
-  const resIsKO = isKO && finished && isDraw90;
 
-  // ===== KO decider UI (empate en 90') =====
-  const showR16Decider = isKO && resIsKO;
+  // Decider aparece cuando el usuario predice empate en KO (antes del partido) o el resultado real es empate
+  const userPg1 = p.g1!==''&&p.g1!==undefined&&p.g1!==null ? parseInt(p.g1) : null;
+  const userPg2 = p.g2!==''&&p.g2!==undefined&&p.g2!==null ? parseInt(p.g2) : null;
+  const userPredictsDraw = isKnockout && !locked && userPg1!==null && userPg2!==null && userPg1===userPg2;
+
+  // ===== KO decider UI =====
+  const showR16Decider = isKnockout && (userPredictsDraw || (finished && realDraw90));
   const userWinner = p?.r16_winner || '';
   const userDecidedBy = p?.r16_decidedBy || '';
   const r16LocalActive = userWinner === '1' ? 'active' : '';
@@ -1200,7 +1207,7 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
   if(finished){
     const myPts=calcPoints(res,pDisplay,m.id);
     resultRow=`<div class="result-row">
-      <span class="result-real">Real: ${res.g1} - ${res.g2}${(decidedBy && isDraw90)?(decidedBy==='ET'?' (Prórroga)':' (Penaltis)'):''}</span>
+      <span class="result-real">Real: ${res.g1} - ${res.g2}${(decidedBy && realDraw90)?(decidedBy==='ET'?' (Prórroga)':' (Penaltis)'):''}</span>
       <span class="result-pred">Tu pred: ${pDisplay.g1!==''?pDisplay.g1:'?'} - ${pDisplay.g2!==''?pDisplay.g2:'?'}</span>
       <span class="result-pts">+${myPts} pts</span>
     </div>`;
@@ -1266,10 +1273,10 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
       <button class="btn-admin" onclick="adminSetKnockoutTeams(${koPhase},'${m.id}')" style="width:100%">Guardar cruce</button>
     </div>` : '';
 
-  // Bloque R16: selector de ganador y método (solo si el partido terminó 90' en empate)
+  // Bloque KO decider: aparece si el usuario predice empate (antes) o el resultado real fue empate
   const r16DeciderBlock = showR16Decider ? `
     <div class="r16-decider" id="r16d-${m.id}">
-      <div class="r16-decider-label">¿Quién pasa?</div>
+      <div class="r16-decider-label">${finished ? '¿Quién pasó?' : '¿Quién pasa en caso de empate?'}</div>
       <div class="r16-decider-row">
         <button class="r16-btn ${r16LocalActive}" onclick="saveR16Pred('${m.id}','winner','1')">${mDisplay.n1}</button>
         <button class="r16-btn ${r16AwayActive}" onclick="saveR16Pred('${m.id}','winner','2')">${mDisplay.n2}</button>
@@ -1304,6 +1311,14 @@ function toggleRivals(mid){ const el=document.getElementById('rv-'+mid); if(!el)
 
 async function savePred(mid){
   if(!S.currentLeague) return;
+  // Re-render inmediato para mostrar/ocultar el decider KO al vuelo
+  const g1now=document.getElementById('pred-'+mid+'-1')?.value??'';
+  const g2now=document.getElementById('pred-'+mid+'-2')?.value??'';
+  if(!S.predictions[S.currentLeague]) S.predictions[S.currentLeague]={};
+  if(!S.predictions[S.currentLeague][S.currentUser]) S.predictions[S.currentLeague][S.currentUser]={};
+  const prev = S.predictions[S.currentLeague][S.currentUser][mid] || {};
+  S.predictions[S.currentLeague][S.currentUser][mid] = { ...prev, g1:g1now, g2:g2now };
+  renderPhaseBody();
   clearTimeout(saveTimers[mid]);
   saveTimers[mid]=setTimeout(async ()=>{
     const g1=document.getElementById('pred-'+mid+'-1')?.value||'';
@@ -1313,11 +1328,10 @@ async function savePred(mid){
       const predRef = doc(fbDb(), 'leagues', S.currentLeague, 'predictions', S.currentUser);
       const snap = await getDoc(predRef);
       const existing = snap.exists()?(snap.data()||{}):{};
-      const next = { ...existing, [mid]: { g1, g2 } };
+      const next = { ...existing, [mid]: { ...(existing[mid]||{}), g1, g2 } };
       await setDoc(predRef, next, { merge: false });
       const ind=document.getElementById('save-ind');
       if(ind){ind.textContent='✅ Guardado';setTimeout(()=>{if(ind)ind.textContent='';},1800);}
-      if(!S.predictions[S.currentLeague]) S.predictions[S.currentLeague]={};
       S.predictions[S.currentLeague][S.currentUser] = next;
     }catch(e){ console.error('savePred error', e); }
   },700);
@@ -1495,29 +1509,85 @@ function calcPoints(res, pred, mid){
   const pg1=pred.g1!==''&&pred.g1!==undefined&&pred.g1!==null?parseInt(pred.g1):null;
   const pg2=pred.g2!==''&&pred.g2!==undefined&&pred.g2!==null?parseInt(pred.g2):null;
 
-  // ===== KO: lógica especial si 90' empata (aplica a todas las fases eliminatorias) =====
-  const isKO = mid && String(mid).match(/^(R16_|QF_|SF_|FIN_)/);
+  // ===== Partidos KO: lógica especial cuando el resultado real es empate a 90' =====
+  const isKO = mid && (
+    String(mid).startsWith('R16_') || String(mid).startsWith('R32_') ||
+    String(mid).startsWith('QF_') || String(mid).startsWith('SF_') ||
+    String(mid).startsWith('TPP_') || String(mid).startsWith('FIN_')
+  );
   const decidedBy = res.decidedBy || null; // 'ET' | 'PEN'
-  const isDraw90 = rg1===rg2;
+  const realDraw90 = rg1===rg2;
 
-  if(isKO && isDraw90){
-    const userWinner = pred.r16_winner || null; // '1'|'2'
+  if(isKO && realDraw90){
+    // El resultado real fue empate en 90' → se decide por prórroga o penaltis
+    const realWinner = res.r16_winner ? String(res.r16_winner) : '0'; // '1'|'2'
+    const userWinner = pred.r16_winner ? String(pred.r16_winner) : null;
     const userDecidedBy = pred.r16_decidedBy || null; // 'ET'|'PEN'
 
-    if(!userWinner || !userDecidedBy) return 0;
+    if(pg1===null||pg2===null) return 0;
 
-    const realWinner = res.r16_winner ? String(res.r16_winner) : '0'; // '1'|'2'
-    if(realWinner==='0') return 0;
+    const userPredictsDraw = pg1===pg2;
 
-    let pts = 0;
-    if(String(userWinner)===String(realWinner)){
-      pts = 8;
-      if(String(userDecidedBy)===String(decidedBy)) pts = 10;
+    if(userPredictsDraw){
+      // El usuario predijo empate → aplica lógica de 8/10 pts
+      // Si no eligió ganador/fase, 0 pts
+      if(!userWinner || !userDecidedBy) return 0;
+      if(realWinner==='0') return 0; // admin no ha puesto ganador aún
+      let pts = 0;
+      if(String(userWinner)===String(realWinner)){
+        pts = 8;
+        if(String(userDecidedBy)===String(decidedBy)) pts = 10;
+      }
+      return pts;
+    } else {
+      // El usuario NO predijo empate → puntuación estándar de grupos sobre los 90'
+      if(pg1===rg1&&pg2===rg2) return 7; // exacto (imposible si real es empate y pred no lo es)
+      const realWin=rg1>rg2?1:(rg2>rg1?2:0);
+      const predWin=pg1>pg2?1:(pg2>pg1?2:0);
+      const acertaGanador=predWin===realWin;
+      const acertaG1=pg1===rg1, acertaG2=pg2===rg2;
+      const aciertaAlgunGol=acertaG1||acertaG2;
+      const aciertaAmbosGoles=acertaG1&&acertaG2;
+      if(aciertaAlgunGol&&!aciertaAmbosGoles&&!acertaGanador) return 1;
+      if(acertaGanador&&!aciertaAlgunGol) return 2;
+      if(acertaGanador&&aciertaAlgunGol&&!aciertaAmbosGoles) return 4;
+      return 0;
     }
-    return pts;
   }
 
-  // Compatibilidad: reglas antiguas para el resto o si no hay empate
+  if(isKO && !realDraw90){
+    // Resultado real NO fue empate en 90' → puntuación estándar
+    // Pero si el usuario predijo empate y eligió ganador/fase: 3 pts (ganador) o 6 pts (ganador+fase)
+    if(pg1===null||pg2===null) return 0;
+    const userPredictsDraw = pg1===pg2;
+    const realWinner = rg1>rg2?1:2; // siempre hay ganador en 90' aquí
+    const userWinner = pred.r16_winner ? String(pred.r16_winner) : null;
+    const userDecidedBy = pred.r16_decidedBy || null;
+
+    if(userPredictsDraw && userWinner){
+      // El usuario predijo empate pero el resultado no lo fue → 3 o 6 pts si acertó ganador
+      const userWinnerNum = String(userWinner) === '1' ? 1 : 2;
+      if(userWinnerNum === realWinner){
+        if(userDecidedBy && decidedBy && String(userDecidedBy)===String(decidedBy)) return 6;
+        return 3;
+      }
+      return 0;
+    }
+
+    // Predicción sin empate → lógica normal
+    if(pg1===rg1&&pg2===rg2) return 7;
+    const predWin=pg1>pg2?1:(pg2>pg1?2:0);
+    const acertaGanador=predWin===realWinner;
+    const acertaG1=pg1===rg1, acertaG2=pg2===rg2;
+    const aciertaAlgunGol=acertaG1||acertaG2;
+    const aciertaAmbosGoles=acertaG1&&acertaG2;
+    if(aciertaAlgunGol&&!aciertaAmbosGoles&&!acertaGanador) return 1;
+    if(acertaGanador&&!aciertaAlgunGol) return 2;
+    if(acertaGanador&&aciertaAlgunGol&&!aciertaAmbosGoles) return 4;
+    return 0;
+  }
+
+  // ===== Partidos de grupos: lógica original =====
   if(pg1===null||pg2===null) return 0;
   if(pg1===rg1&&pg2===rg2) return 7;
 
