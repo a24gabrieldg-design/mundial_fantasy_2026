@@ -1145,25 +1145,23 @@ async function adminSwapTeams(mid){
 function matchCardHTML(m, preds, isKnockout, koPhase){
   const isR16 = String(m.id||'').startsWith('R16_');
 
-  const resRaw = S.results[m.id];
-  // Si swapped, invertir g1/g2 del resultado para mostrar correctamente
-  const isSwapped0 = !!(S.swappedMatches?.[m.id]);
-  const res0 = resRaw && isSwapped0 ? { g1: resRaw.g2, g2: resRaw.g1 } : resRaw;
-  const finished = !!res0;
-
-  const isDraw90 = isR16 && finished && Number(res0?.g1)===Number(res0?.g2);
-
-  const decidedBy = res?.decidedBy || null; // 'ET' | 'PEN'
-  const realWinner = res?.r16_winner ? String(res.r16_winner) : null; // '1'|'2'
-
   // Aplicar swap si el admin lo ha marcado (intercambia local y visitante)
-
   const isSwapped = !!(S.swappedMatches?.[m.id]);
   const mDisplay = isSwapped
     ? { ...m, t1:m.t2, n1:m.n2, t2:m.t1, n2:m.n1 }
     : m;
+
+  // Resultado real, invirtiendo g1/g2 si el partido está swapped
+  const resRaw = S.results[m.id];
+  const res = resRaw && isSwapped ? { ...resRaw, g1: resRaw.g2, g2: resRaw.g1 } : resRaw;
+  const finished = !!res;
+
+  const isDraw90 = isR16 && finished && Number(res?.g1)===Number(res?.g2);
+  const decidedBy = res?.decidedBy || null; // 'ET' | 'PEN'
+  const realWinner = res?.r16_winner ? String(res.r16_winner) : null; // '1'|'2'
+
   const p=preds[m.id]||{g1:'',g2:''};
-  const resIsR16 = isR16 && finished && (Number(res.g1)===Number(res.g2));
+  const resIsR16 = isR16 && finished && isDraw90;
 
   // ===== R16 decider UI =====
   const showR16Decider = isR16 && resIsR16;
@@ -1175,9 +1173,8 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
   const r16PENActive = userDecidedBy === 'PEN' ? 'active' : '';
   const r16RealText = decidedBy ? ` (${decidedBy === 'ET' ? 'Prórroga' : 'Penaltis'})` : '';
 
-
-  // Si swapped, también invertir la predicción mostrada y el resultado
-  const pDisplay = isSwapped ? { g1: p.g2??'', g2: p.g1??'' } : p;
+  // Si swapped, también invertir la predicción mostrada
+  const pDisplay = isSwapped ? { ...p, g1: p.g2??'', g2: p.g1??'' } : p;
   const sd = S.schedule?.[m.id];
   const matchDtParts = (sd?.date||m.date).split('-');
   const [Y,M,D] = matchDtParts;
@@ -1192,10 +1189,6 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
   const forcedLock = hasForcedLock ? lockOverrideVal === '1' : null;
   const isClosedByTime = now>=closeDt||m.locked;
   const locked = hasForcedLock ? forcedLock : isClosedByTime;
-  const resRaw=S.results[m.id];
-  // Si swapped, invertir g1/g2 del resultado para mostrar correctamente
-  const res = resRaw && isSwapped ? { g1: resRaw.g2, g2: resRaw.g1 } : resRaw;
-  const finished=!!res;
   const lockStr=locked?(finished?'✅ Finalizado':'🔒 Cerrado'):`⏰ Cierre: ${fmtTime(closeDt)}`;
   const showPredictionClosedUi = locked&&!finished;
   const predSmall = finished ? `<span class="pred-small">+${calcPoints(res,pDisplay)} pts</span>` : '';
