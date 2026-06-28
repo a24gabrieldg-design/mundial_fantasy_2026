@@ -112,10 +112,17 @@
             <div class="info-card">
               <div class="info-card-title">🏅 Sistema de puntuación</div>
               <table class="score-table">
+                <tr><td class="desc" colspan="2" style="font-size:11px;color:var(--text2);padding-bottom:4px">🏟️ Todos los partidos</td></tr>
                 <tr><td class="desc">Resultado exacto</td><td class="pts">7 pts</td></tr>
                 <tr><td class="desc">Acertar los goles de un equipo (sin exacto)</td><td class="pts">1 pt</td></tr>
-                <tr><td class="desc">Acertar el ganador pero no acertar la cantidad de goles de ningún equipo</td><td class="pts">2 pts</td></tr>
+                <tr><td class="desc">Acertar el ganador, sin acertar goles de ningún equipo</td><td class="pts">2 pts</td></tr>
                 <tr><td class="desc">Acertar el ganador y los goles de un solo equipo (no exacto)</td><td class="pts">4 pts</td></tr>
+                <tr><td class="desc" colspan="2" style="font-size:11px;color:var(--text2);padding-top:10px;padding-bottom:4px">⚔️ Partidos eliminatorios (si predices empate)</td></tr>
+                <tr><td class="desc">Aciertas quién pasa (ganador en prórroga/penaltis)</td><td class="pts">8 pts</td></tr>
+                <tr><td class="desc">Aciertas quién pasa Y cómo (prórroga o penaltis)</td><td class="pts">10 pts</td></tr>
+                <tr><td class="desc" colspan="2" style="font-size:11px;color:var(--text2);padding-top:10px;padding-bottom:4px">⚔️ Partidos eliminatorios (si predices empate distinto al real)</td></tr>
+                <tr><td class="desc">Aciertas quién pasa (ej: predices 0-0, real 1-1)</td><td class="pts">3 pts</td></tr>
+                <tr><td class="desc">Aciertas quién pasa Y cómo</td><td class="pts">6 pts</td></tr>
               </table>
             </div>
             <div class="info-card">
@@ -175,7 +182,7 @@
   </div>
 
 
-		<script src="app.js?v=2"></script>
+		<script src="app.js?v=3"></script>
 <script>
   // Evita que al abrir como file:// por doble click falle el acceso a endpoints.
   // Si estás en file://, mostramos una pista clara.
