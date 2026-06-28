@@ -946,11 +946,14 @@ function renderMatchesByDate(){
     });
   });
 
-  // Fases eliminatorias
+  // Fases eliminatorias (solo se incluyen si al menos un partido tiene equipos definidos)
   const koPhaseLabels = { 1:'Dieciseisavos de Final', 2:'Octavos de Final', 3:'Cuartos de Final', 4:'Semifinales', 5:'3er y 4to Puesto', 6:'Final' };
   [1,2,3,4,5,6].forEach(phase => {
     const koMatches = S.knockoutMatches[phase] || KNOCKOUT_TEMPLATES[phase];
+    const phaseHasTeams = koMatches.some(m => m.n1 !== 'Por definir' || m.n2 !== 'Por definir');
+    if(!phaseHasTeams) return; // No mostrar partidos sin equipos definidos en la vista por fecha
     koMatches.forEach(m => {
+      if(m.n1 === 'Por definir' && m.n2 === 'Por definir') return; // saltar partidos sin equipos
       const sd = S.schedule?.[m.id];
       const date = sd?.date || m.date;
       const time = sd?.time || m.time;
@@ -1077,6 +1080,11 @@ function renderPhaseBody(){
       body.innerHTML=`<div class="lock-card"><div class="lock-icon">🔒</div><div class="lock-msg">${PHASES[S.currentPhase]}</div><div class="lock-time">${d}d ${h}h</div><div class="lock-sub">Se desbloquea cuando se conozcan los cruces</div></div>`;
       return;
     }
+    const phaseHasAnyTeam = koMatches.some(m => m.n1 !== 'Por definir' || m.n2 !== 'Por definir');
+    if(!phaseHasAnyTeam && !isTotalAdmin()){
+      body.innerHTML=`<div class="lock-card"><div class="lock-icon">⏳</div><div class="lock-msg">${PHASES[S.currentPhase]}</div><div class="lock-sub">Los cruces se publicarán próximamente</div></div>`;
+      return;
+    }
     body.innerHTML=`<div id="ko-matches-list"></div>`;
     renderKOMatches();
   }
@@ -1093,7 +1101,7 @@ function renderGroupMatchList(){
   const c=document.getElementById('gmatches'); if(!c) return;
   const matches=MATCHES_GROUP[S.currentGroup]||[];
   const preds=((S.predictions[S.currentLeague]||{})[S.currentUser])||{};
-  c.innerHTML=`<div class="group-header">Grupo ${S.currentGroup}</div>`+matches.map(m=>matchCardHTML(m,preds,false,null))+`<div class="save-indicator" id="save-ind"></div>`;
+  c.innerHTML=`<div class="group-header">Grupo ${S.currentGroup}</div>`+matches.map(m=>matchCardHTML(m,preds,false,null)).join('')+`<div class="save-indicator" id="save-ind"></div>`;
 }
 
 function renderKOMatches(){
@@ -1311,14 +1319,14 @@ function toggleRivals(mid){ const el=document.getElementById('rv-'+mid); if(!el)
 
 async function savePred(mid){
   if(!S.currentLeague) return;
-  // Re-render inmediato para mostrar/ocultar el decider KO al vuelo
   const g1now=document.getElementById('pred-'+mid+'-1')?.value??'';
   const g2now=document.getElementById('pred-'+mid+'-2')?.value??'';
   if(!S.predictions[S.currentLeague]) S.predictions[S.currentLeague]={};
   if(!S.predictions[S.currentLeague][S.currentUser]) S.predictions[S.currentLeague][S.currentUser]={};
   const prev = S.predictions[S.currentLeague][S.currentUser][mid] || {};
   S.predictions[S.currentLeague][S.currentUser][mid] = { ...prev, g1:g1now, g2:g2now };
-  renderPhaseBody();
+  // Actualizar visibilidad del decider KO sin destruir el DOM completo
+  updateKODeciderVisibility(mid);
   clearTimeout(saveTimers[mid]);
   saveTimers[mid]=setTimeout(async ()=>{
     const g1=document.getElementById('pred-'+mid+'-1')?.value||'';
@@ -1335,6 +1343,60 @@ async function savePred(mid){
       S.predictions[S.currentLeague][S.currentUser] = next;
     }catch(e){ console.error('savePred error', e); }
   },700);
+}
+
+// Muestra u oculta el bloque del decider KO en tiempo real según si el usuario predice empate,
+// sin reconstruir todo el DOM (evita perder el foco del input).
+function updateKODeciderVisibility(mid){
+  const card = document.getElementById('mc-'+mid);
+  if(!card) return;
+  const existing = card.querySelector('.r16-decider');
+  const inp1 = document.getElementById('pred-'+mid+'-1');
+  const inp2 = document.getElementById('pred-'+mid+'-2');
+  if(!inp1||!inp2) return;
+  const v1 = inp1.value, v2 = inp2.value;
+  const userDraw = v1!==''&&v2!==''&&!isNaN(parseInt(v1))&&!isNaN(parseInt(v2))&&parseInt(v1)===parseInt(v2);
+  // Obtener nombres de equipos del partido desde la tarjeta
+  const teamNames = card.querySelectorAll('.team-name');
+  const n1 = teamNames[0]?.textContent||'Local';
+  const n2 = teamNames[1]?.textContent||'Visitante';
+  const p = (S.predictions[S.currentLeague]?.[S.currentUser]?.[mid]) || {};
+  const userWinner = p.r16_winner||'';
+  const userDecidedBy = p.r16_decidedBy||'';
+  const r16LocalActive = userWinner==='1'?'active':'';
+  const r16AwayActive = userWinner==='2'?'active':'';
+  const r16ETActive = userDecidedBy==='ET'?'active':'';
+  const r16PENActive = userDecidedBy==='PEN'?'active':'';
+  // Obtener resultado real si existe para mostrar texto
+  const res = S.results?.[mid];
+  const realDraw90 = res && Number(res.g1)===Number(res.g2);
+  const decidedBy = res?.decidedBy||null;
+  const r16RealText = decidedBy?(decidedBy==='ET'?' (Prórroga)':' (Penaltis)'):'';
+  const showDecider = userDraw || realDraw90;
+  if(showDecider){
+    const label = res ? '¿Quién pasó?' : '¿Quién pasa en caso de empate?';
+    const html = `<div class="r16-decider" id="r16d-${mid}">
+      <div class="r16-decider-label">${label}</div>
+      <div class="r16-decider-row">
+        <button class="r16-btn ${r16LocalActive}" onclick="saveR16Pred('${mid}','winner','1')">${n1}</button>
+        <button class="r16-btn ${r16AwayActive}" onclick="saveR16Pred('${mid}','winner','2')">${n2}</button>
+      </div>
+      <div class="r16-decider-label" style="margin-top:8px">¿Cómo?${r16RealText}</div>
+      <div class="r16-decider-row">
+        <button class="r16-btn ${r16ETActive}" onclick="saveR16Pred('${mid}','decidedBy','ET')">Prórroga</button>
+        <button class="r16-btn ${r16PENActive}" onclick="saveR16Pred('${mid}','decidedBy','PEN')">Penaltis</button>
+      </div>
+    </div>`;
+    if(existing){
+      existing.outerHTML = html;
+    } else {
+      // Insertar antes de resultRow (o al final de match-meta)
+      const meta = card.querySelector('.match-meta');
+      if(meta) meta.insertAdjacentHTML('afterend', html);
+    }
+  } else {
+    if(existing) existing.remove();
+  }
 }
 
 async function saveR16Pred(mid, field, value){
