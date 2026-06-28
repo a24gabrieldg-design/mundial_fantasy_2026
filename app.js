@@ -1886,7 +1886,21 @@ function fmtDate(d){ const[y,m,dd]=d.split('-');const ms=['Ene','Feb','Mar','Abr
 function fmtTime(dt){ return dt.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}); }
 
 // Init
+// Exponer funciones de auth al scope global para que los onclick inline de index.html funcionen siempre
+// (especialmente tras recargas o cambios de build)
+window.doLogin = doLogin;
+window.doRegister = doRegister;
+window.doLogout = doLogout;
+window.switchAuthTab = switchAuthTab;
+
+// Hacer también accesibles en el scope global (por si el navegador no resuelve window.* en onclick)
+self.doLogin = doLogin;
+self.doRegister = doRegister;
+self.doLogout = doLogout;
+self.switchAuthTab = switchAuthTab;
+
 if(S.currentUser){
+
   (async ()=>{
     // recargar estado completo del usuario actual
     reloadStateForCurrentUser();
@@ -1901,3 +1915,4 @@ if(S.currentUser){
     showMain();
   })();
 }
+
