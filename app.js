@@ -1171,21 +1171,6 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
 
   const p=preds[m.id]||{g1:'',g2:''};
 
-  // Decider aparece cuando el usuario predice empate en KO (antes del partido) o el resultado real es empate
-  const userPg1 = p.g1!==''&&p.g1!==undefined&&p.g1!==null ? parseInt(p.g1) : null;
-  const userPg2 = p.g2!==''&&p.g2!==undefined&&p.g2!==null ? parseInt(p.g2) : null;
-  const userPredictsDraw = isKnockout && !locked && userPg1!==null && userPg2!==null && userPg1===userPg2;
-
-  // ===== KO decider UI =====
-  const showR16Decider = isKnockout && (userPredictsDraw || (finished && realDraw90));
-  const userWinner = p?.r16_winner || '';
-  const userDecidedBy = p?.r16_decidedBy || '';
-  const r16LocalActive = userWinner === '1' ? 'active' : '';
-  const r16AwayActive = userWinner === '2' ? 'active' : '';
-  const r16ETActive = userDecidedBy === 'ET' ? 'active' : '';
-  const r16PENActive = userDecidedBy === 'PEN' ? 'active' : '';
-  const r16RealText = decidedBy ? ` (${decidedBy === 'ET' ? 'Prórroga' : 'Penaltis'})` : '';
-
   // Si swapped, también invertir la predicción mostrada
   const pDisplay = isSwapped ? { ...p, g1: p.g2??'', g2: p.g1??'' } : p;
   const sd = S.schedule?.[m.id];
@@ -1202,6 +1187,21 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
   const forcedLock = hasForcedLock ? lockOverrideVal === '1' : null;
   const isClosedByTime = now>=closeDt||m.locked;
   const locked = hasForcedLock ? forcedLock : isClosedByTime;
+
+  // Decider aparece cuando el usuario predice empate en KO (antes del partido) o el resultado real es empate
+  const userPg1 = p.g1!==''&&p.g1!==undefined&&p.g1!==null ? parseInt(p.g1) : null;
+  const userPg2 = p.g2!==''&&p.g2!==undefined&&p.g2!==null ? parseInt(p.g2) : null;
+  const userPredictsDraw = isKnockout && !locked && userPg1!==null && userPg2!==null && userPg1===userPg2;
+
+  // ===== KO decider UI =====
+  const showR16Decider = isKnockout && (userPredictsDraw || (finished && realDraw90));
+  const userWinner = p?.r16_winner || '';
+  const userDecidedBy = p?.r16_decidedBy || '';
+  const r16LocalActive = userWinner === '1' ? 'active' : '';
+  const r16AwayActive = userWinner === '2' ? 'active' : '';
+  const r16ETActive = userDecidedBy === 'ET' ? 'active' : '';
+  const r16PENActive = userDecidedBy === 'PEN' ? 'active' : '';
+  const r16RealText = decidedBy ? ` (${decidedBy === 'ET' ? 'Prórroga' : 'Penaltis'})` : '';
   const lockStr=locked?(finished?'✅ Finalizado':'🔒 Cerrado'):`⏰ Cierre: ${fmtTime(closeDt)}`;
   const showPredictionClosedUi = locked&&!finished;
   const predSmall = finished ? `<span class="pred-small">+${calcPoints(res,pDisplay,m.id)} pts</span>` : '';
