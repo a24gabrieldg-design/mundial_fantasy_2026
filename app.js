@@ -1143,12 +1143,37 @@ async function adminSwapTeams(mid){
 }
 
 function matchCardHTML(m, preds, isKnockout, koPhase){
+  const isR16 = String(m.id||'').startsWith('R16_');
+
+  const resRaw=S.results[m.id];
+  // Si swapped, invertir g1/g2 del resultado para mostrar correctamente
+  const res = resRaw && isSwapped ? { g1: resRaw.g2, g2: resRaw.g1 } : resRaw;
+  const finished=!!res;
+
+  const isDraw90 = isR16 && finished && Number(res?.g1)===Number(res?.g2);
+  const decidedBy = res?.decidedBy || null; // 'ET' | 'PEN'
+  const realWinner = res?.r16_winner ? String(res.r16_winner) : null; // '1'|'2'
+
   // Aplicar swap si el admin lo ha marcado (intercambia local y visitante)
+
   const isSwapped = !!(S.swappedMatches?.[m.id]);
   const mDisplay = isSwapped
     ? { ...m, t1:m.t2, n1:m.n2, t2:m.t1, n2:m.n1 }
     : m;
   const p=preds[m.id]||{g1:'',g2:''};
+  const resIsR16 = isR16 && finished && (Number(res.g1)===Number(res.g2));
+
+  // ===== R16 decider UI =====
+  const showR16Decider = isR16 && resIsR16;
+  const userWinner = p?.r16_winner || '';
+  const userDecidedBy = p?.r16_decidedBy || '';
+  const r16LocalActive = userWinner === '1' ? 'active' : '';
+  const r16AwayActive = userWinner === '2' ? 'active' : '';
+  const r16ETActive = userDecidedBy === 'ET' ? 'active' : '';
+  const r16PENActive = userDecidedBy === 'PEN' ? 'active' : '';
+  const r16RealText = decidedBy ? ` (${decidedBy === 'ET' ? 'Prórroga' : 'Penaltis'})` : '';
+
+
   // Si swapped, también invertir la predicción mostrada y el resultado
   const pDisplay = isSwapped ? { g1: p.g2??'', g2: p.g1??'' } : p;
   const sd = S.schedule?.[m.id];
@@ -1177,12 +1202,13 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
 
   let resultRow='';
   if(finished){
-    const myPts=calcPoints(res,pDisplay);
+    const myPts=calcPoints(res,pDisplay,m.id);
     resultRow=`<div class="result-row">
-      <span class="result-real">Real: ${res.g1} - ${res.g2}</span>
+      <span class="result-real">Real: ${res.g1} - ${res.g2}${(decidedBy && isDraw90)?(decidedBy==='ET'?' (Prórroga)':' (Penaltis)'):''}</span>
       <span class="result-pred">Tu pred: ${pDisplay.g1!==''?pDisplay.g1:'?'} - ${pDisplay.g2!==''?pDisplay.g2:'?'}</span>
       <span class="result-pts">+${myPts} pts</span>
     </div>`;
+
     if(S.currentLeague){
       const league=S.leagues[S.currentLeague];
       const rivalsData=league.members.filter(mb=>mb!==S.currentUser).map(mb=>{
