@@ -1,5 +1,5 @@
 // ===== DATA =====
-const PHASES = ['Fase de Grupos','Octavos de Final','Cuartos de Final','Semifinales','Final'];
+const PHASES = ['Fase de Grupos','Dieciseisavos de Final','Cuartos de Final','Semifinales','Final'];
 const GROUPS = ['A','B','C','D','E','F','G','H','I','J','K','L'];
 
 const ADMIN_RESULT_DEFAULTS = {
@@ -945,7 +945,7 @@ function renderMatchesByDate(){
   });
 
   // Fases eliminatorias
-  const koPhaseLabels = { 1:'Octavos de Final', 2:'Cuartos de Final', 3:'Semifinales', 4:'Final' };
+  const koPhaseLabels = { 1:'Dieciseisavos de Final', 2:'Cuartos de Final', 3:'Semifinales', 4:'Final' };
   [1,2,3,4].forEach(phase => {
     const koMatches = S.knockoutMatches[phase] || KNOCKOUT_TEMPLATES[phase];
     koMatches.forEach(m => {
@@ -997,7 +997,7 @@ function renderMatchesByDate(){
   const dayMatches = byDate[S.currentDateTab] || [];
   const listHtml = dayMatches.map(m => {
     // Pasar _label como info extra en el partido para mostrarlo en la tarjeta
-    const koPhaseMap = {'Octavos de Final':1,'Cuartos de Final':2,'Semifinales':3,'Final':4};
+    const koPhaseMap = {'Dieciseisavos de Final':1,'Cuartos de Final':2,'Semifinales':3,'Final':4};
     const mKoPhase = koPhaseMap[m._label] || null;
     return matchCardHTML({ ...m, _phaseLabel: m._label }, preds, m._label !== 'Fase de Grupos', mKoPhase);
   }).join('');
@@ -1145,28 +1145,28 @@ async function adminSwapTeams(mid){
 }
 
 function matchCardHTML(m, preds, isKnockout, koPhase){
-  const isR16 = String(m.id||'').startsWith('R16_');
-
   // Aplicar swap si el admin lo ha marcado (intercambia local y visitante)
   const isSwapped = !!(S.swappedMatches?.[m.id]);
   const mDisplay = isSwapped
     ? { ...m, t1:m.t2, n1:m.n2, t2:m.t1, n2:m.n1 }
     : m;
 
+  const isKO = isKnockout || String(m.id||'').match(/^(R16_|QF_|SF_|FIN_)/);
+
   // Resultado real, invirtiendo g1/g2 si el partido está swapped
   const resRaw = S.results[m.id];
   const res = resRaw && isSwapped ? { ...resRaw, g1: resRaw.g2, g2: resRaw.g1 } : resRaw;
   const finished = !!res;
 
-  const isDraw90 = isR16 && finished && Number(res?.g1)===Number(res?.g2);
+  const isDraw90 = isKO && finished && Number(res?.g1)===Number(res?.g2);
   const decidedBy = res?.decidedBy || null; // 'ET' | 'PEN'
   const realWinner = res?.r16_winner ? String(res.r16_winner) : null; // '1'|'2'
 
   const p=preds[m.id]||{g1:'',g2:''};
-  const resIsR16 = isR16 && finished && isDraw90;
+  const resIsKO = isKO && finished && isDraw90;
 
-  // ===== R16 decider UI =====
-  const showR16Decider = isR16 && resIsR16;
+  // ===== KO decider UI (empate en 90') =====
+  const showR16Decider = isKO && resIsKO;
   const userWinner = p?.r16_winner || '';
   const userDecidedBy = p?.r16_decidedBy || '';
   const r16LocalActive = userWinner === '1' ? 'active' : '';
@@ -1495,22 +1495,17 @@ function calcPoints(res, pred, mid){
   const pg1=pred.g1!==''&&pred.g1!==undefined&&pred.g1!==null?parseInt(pred.g1):null;
   const pg2=pred.g2!==''&&pred.g2!==undefined&&pred.g2!==null?parseInt(pred.g2):null;
 
-  // ===== R16: lógica especial si 90' empata =====
-  const isR16 = mid && String(mid).startsWith('R16_');
-  const decidedBy = res.decidedBy || null; // 'ET' | 'PEN' | 'REG'
+  // ===== KO: lógica especial si 90' empata (aplica a todas las fases eliminatorias) =====
+  const isKO = mid && String(mid).match(/^(R16_|QF_|SF_|FIN_)/);
+  const decidedBy = res.decidedBy || null; // 'ET' | 'PEN'
   const isDraw90 = rg1===rg2;
 
-  if(isR16 && isDraw90){
-    // Si el usuario eligió ganador + momento, puntuar 8/10
+  if(isKO && isDraw90){
     const userWinner = pred.r16_winner || null; // '1'|'2'
     const userDecidedBy = pred.r16_decidedBy || null; // 'ET'|'PEN'
 
     if(!userWinner || !userDecidedBy) return 0;
 
-    // El ganador correcto depende del decidedBy + los goles de 90'
-    // En esta implementación, decidedBy indica el tipo de resolución (ET o PEN)
-    // y el ganador real es el equipo que el admin marque implícitamente en chosenWinner del documento.
-    // Para no inventar otro campo, deducimos el ganador desde res.r16_winner si existe, si no => 0.
     const realWinner = res.r16_winner ? String(res.r16_winner) : '0'; // '1'|'2'
     if(realWinner==='0') return 0;
 
@@ -1960,4 +1955,3 @@ if(window.__FIREBASE__?.db){
 } else {
   window.addEventListener('firebase-ready', onFirebaseReady, { once: true });
 }
-
