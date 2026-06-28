@@ -1145,12 +1145,14 @@ async function adminSwapTeams(mid){
 function matchCardHTML(m, preds, isKnockout, koPhase){
   const isR16 = String(m.id||'').startsWith('R16_');
 
-  const resRaw=S.results[m.id];
+  const resRaw = S.results[m.id];
   // Si swapped, invertir g1/g2 del resultado para mostrar correctamente
-  const res = resRaw && isSwapped ? { g1: resRaw.g2, g2: resRaw.g1 } : resRaw;
-  const finished=!!res;
+  const isSwapped0 = !!(S.swappedMatches?.[m.id]);
+  const res0 = resRaw && isSwapped0 ? { g1: resRaw.g2, g2: resRaw.g1 } : resRaw;
+  const finished = !!res0;
 
-  const isDraw90 = isR16 && finished && Number(res?.g1)===Number(res?.g2);
+  const isDraw90 = isR16 && finished && Number(res0?.g1)===Number(res0?.g2);
+
   const decidedBy = res?.decidedBy || null; // 'ET' | 'PEN'
   const realWinner = res?.r16_winner ? String(res.r16_winner) : null; // '1'|'2'
 
@@ -1915,4 +1917,3 @@ if(S.currentUser){
     showMain();
   })();
 }
-
