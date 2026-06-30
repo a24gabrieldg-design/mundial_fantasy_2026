@@ -9,7 +9,7 @@ const ADMIN_RESULT_DEFAULTS = {
   oneTeamGoalsNoExact: 1
 };
 
-const ADMIN_EMAIL = 'a24gabrieldg@iesantonlosada.gal';
+const ADMIN_EMAILS = ['a24gabrieldg@iesantonlosada.gal', 'gabidubrag@gmail.com'];
 // Nota: las reglas Firestore deben permitir escrituras a Admin Total.
 // En app.js solo podemos identificar al admin por email; Firestore rules deben implementar la misma lógica.
 
@@ -188,7 +188,7 @@ const getCurrentUserEmail = () => {
   // Fuente de verdad: el email real de la sesión de Firebase Auth (igual que comprueban
   // las reglas de Firestore con request.auth.token.email). Antes se usaba el campo
   // 'username' guardado en Firestore, que puede desincronizarse del email real de login
-  // y causar que isTotalAdmin() falle aunque ADMIN_EMAIL esté bien configurado.
+  // y causar que isTotalAdmin() falle aunque ADMIN_EMAILS esté bien configurado.
   try {
     const authEmail = fbAuth()?.currentUser?.email;
     if (authEmail) return authEmail.trim();
@@ -198,7 +198,9 @@ const getCurrentUserEmail = () => {
 };
 const isTotalAdmin = () => {
   const email = getCurrentUserEmail();
-  return email && String(email).toLowerCase() === String(ADMIN_EMAIL).toLowerCase();
+  if(!email) return false;
+  const lower = String(email).toLowerCase();
+  return ADMIN_EMAILS.some(a => String(a).toLowerCase() === lower);
 };
 const isLeagueAdminForCurrentLeague = () => {
   try {
@@ -1198,11 +1200,15 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
   const now=new Date();
 
   // S.lockOverrides (Firestore, global para todos) tiene prioridad; fallback localStorage
+  // - Override a '1' (cerrar forzado): prioridad absoluta, cierra el partido aunque no haya llegado la hora.
+  // - Override a '0' (abrir forzado, p.ej. al fijar el cruce de equipos en eliminatorias):
+  //   solo mantiene el partido abierto ANTES de su hora de cierre real. Una vez se llega a esa
+  //   hora, el partido se cierra automáticamente igual, en vez de quedar abierto para siempre.
   const lockOverrideVal = S.lockOverrides?.[m.id] ?? localStorage.getItem(`wf26_forced_lock_${m.id}`);
   const hasForcedLock = lockOverrideVal !== null && lockOverrideVal !== undefined;
   const forcedLock = hasForcedLock ? lockOverrideVal === '1' : null;
   const isClosedByTime = now>=closeDt||m.locked;
-  const locked = hasForcedLock ? forcedLock : isClosedByTime;
+  const locked = forcedLock===true ? true : isClosedByTime;
 
   // Decider aparece cuando el usuario predice empate en KO (antes del partido) o el resultado real es empate
   const userPg1 = p.g1!==''&&p.g1!==undefined&&p.g1!==null ? parseInt(p.g1) : null;
@@ -1242,7 +1248,26 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
         const rpr=rp[m.id]||{g1:'',g2:''};
         const rprDisplay = isSwapped ? { g1: rpr.g2??'', g2: rpr.g1??'' } : rpr;
         const rpts=calcPoints(res,rprDisplay,m.id);
-        return `<div class="rival-row"><span class="rival-name">${getDisplayName(mb)}</span><span class="rival-pred">${rprDisplay.g1!==''?rprDisplay.g1:'?'} - ${rprDisplay.g2!==''?rprDisplay.g2:'?'}</span><span class="rival-pts">+${rpts}</span></div>`;
+
+        // Si el rival predijo empate en un partido eliminatorio, mostrar la fase
+        // (Prórroga/Penaltis) que eligió junto al resultado: a la izquierda si ganaba
+        // el equipo local mostrado, a la derecha si ganaba el visitante mostrado.
+        let phaseLeft = '', phaseRight = '';
+        if(isKnockout){
+          const rDraw = rprDisplay.g1!==''&&rprDisplay.g2!==''&&rprDisplay.g1!==undefined&&rprDisplay.g2!==undefined
+            && Number(rprDisplay.g1)===Number(rprDisplay.g2);
+          if(rDraw && rpr.r16_winner && rpr.r16_decidedBy){
+            const phaseLabel = rpr.r16_decidedBy==='ET' ? 'Prórroga' : 'Penaltis';
+            // rpr.r16_winner está en términos del partido original (sin swap); invertir si está swapped
+            const winnerDisplaySide = isSwapped
+              ? (rpr.r16_winner==='1' ? '2' : '1')
+              : rpr.r16_winner;
+            if(winnerDisplaySide==='1') phaseLeft = `<span class="rival-phase">${phaseLabel}</span> `;
+            else if(winnerDisplaySide==='2') phaseRight = ` <span class="rival-phase">${phaseLabel}</span>`;
+          }
+        }
+
+        return `<div class="rival-row"><span class="rival-name">${getDisplayName(mb)}</span><span class="rival-pred">${phaseLeft}${rprDisplay.g1!==''?rprDisplay.g1:'?'} - ${rprDisplay.g2!==''?rprDisplay.g2:'?'}${phaseRight}</span><span class="rival-pts">+${rpts}</span></div>`;
       }).join('');
       if(rivalsData) resultRow+=`<button class="rivals-btn" onclick="toggleRivals('${m.id}')">👥 Ver predicciones rivales</button><div class="rivals-panel" id="rv-${m.id}">${rivalsData}</div>`;
     }
