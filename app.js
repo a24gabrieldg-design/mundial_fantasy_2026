@@ -725,7 +725,7 @@ async function joinLeague(){
     err.textContent='Error al unirse: '+(e?.message||String(e));
   }
 }
-function closeModal(){ document.getElementById('modal-overlay').style.display='none'; pendingAvatar=null; }
+function closeModal(){ document.getElementById('modal-overlay').style.display='none'; pendingAvatar=null; teardownCropDragHandlers(); }
 function closeModalBg(e){ if(e.target===document.getElementById('modal-overlay')) closeModal(); }
 
 function renderLeagues(){
@@ -2152,7 +2152,21 @@ function renderProfileInfo(){
   if(ab){
     const ua=S.users[S.currentUser]?.avatar;
     const em=document.getElementById('profile-avatar-emoji');
-    if(ua){ if(em) em.style.display='none'; let img=ab.querySelector('img.pi');if(!img){img=document.createElement('img');img.className='pi';img.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%;';ab.appendChild(img);}img.src=ua; }
+    if(ua){
+      if(em) em.style.display='none';
+      let img=ab.querySelector('img.pi');
+      if(!img){
+        img=document.createElement('img');
+        img.className='pi';
+        img.style.cssText='position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%;z-index:1;';
+        // Insertar ANTES del input[type=file] (que tiene z-index:2) para que el input
+        // siga estando clicable encima de la imagen y se pueda volver a cambiar la foto.
+        const fileInput = ab.querySelector('input[type=file]');
+        if(fileInput) ab.insertBefore(img, fileInput);
+        else ab.appendChild(img);
+      }
+      img.src=ua;
+    }
   }
 }
 
@@ -2184,35 +2198,182 @@ function resizeImageToDataURL(file, maxSize, quality){
   });
 }
 
-async function updateProfilePic(input){
+// ===== Editor de recorte de foto de perfil =====
+// Estado del editor: imagen cargada, zoom y desplazamiento (en px, relativos al centro)
+const cropState = { img:null, scale:1, minScale:1, offX:0, offY:0, dragging:false, lastX:0, lastY:0 };
+const CROP_BOX = 240; // tamaño en px del marco circular visible en el editor
+
+function updateProfilePic(input){
   if(!input.files[0]) return;
   if(!S.currentUser) return;
+  const file = input.files[0];
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    const img = new Image();
+    img.onload = ()=>{ openCropModal(img); };
+    img.onerror = ()=>{ alert('No se pudo cargar la imagen.'); };
+    img.src = e.target.result;
+  };
+  reader.onerror = ()=>{ alert('No se pudo leer el archivo.'); };
+  reader.readAsDataURL(file);
+  // Limpiar el input para poder volver a seleccionar el mismo archivo si hace falta
+  input.value = '';
+}
+
+function openCropModal(img){
+  cropState.img = img;
+  // Escala mínima: la imagen debe cubrir todo el marco circular (igual que object-fit:cover)
+  cropState.minScale = Math.max(CROP_BOX / img.naturalWidth, CROP_BOX / img.naturalHeight);
+  cropState.scale = cropState.minScale;
+  cropState.offX = 0;
+  cropState.offY = 0;
+
+  document.getElementById('modal-overlay').style.display='flex';
+  const mc = document.getElementById('modal-content');
+  mc.innerHTML = `
+    <div class="modal-title">✂️ Ajusta tu foto</div>
+    <p style="font-size:11px;color:var(--text2);margin-bottom:10px">Arrastra para mover y usa el control para hacer zoom</p>
+    <div class="crop-stage" id="crop-stage" style="width:${CROP_BOX}px;height:${CROP_BOX}px">
+      <img id="crop-img" src="${img.src}" draggable="false">
+      <div class="crop-circle-mask"></div>
+    </div>
+    <input type="range" id="crop-zoom" min="100" max="300" value="100" style="width:100%;margin-top:14px" oninput="onCropZoom(this.value)">
+    <div class="modal-btns" style="margin-top:14px">
+      <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
+      <button class="btn-confirm" onclick="confirmAvatarCrop()">Guardar foto</button>
+    </div>`;
+
+  renderCropTransform();
+  setupCropDragHandlers();
+}
+
+function renderCropTransform(){
+  const im = document.getElementById('crop-img');
+  if(!im || !cropState.img) return;
+  const w = cropState.img.naturalWidth * cropState.scale;
+  const h = cropState.img.naturalHeight * cropState.scale;
+  im.style.width = w + 'px';
+  im.style.height = h + 'px';
+  im.style.left = (CROP_BOX/2 - w/2 + cropState.offX) + 'px';
+  im.style.top = (CROP_BOX/2 - h/2 + cropState.offY) + 'px';
+}
+
+function clampCropOffset(){
+  const w = cropState.img.naturalWidth * cropState.scale;
+  const h = cropState.img.naturalHeight * cropState.scale;
+  const maxOffX = Math.max(0, (w - CROP_BOX) / 2);
+  const maxOffY = Math.max(0, (h - CROP_BOX) / 2);
+  cropState.offX = Math.min(maxOffX, Math.max(-maxOffX, cropState.offX));
+  cropState.offY = Math.min(maxOffY, Math.max(-maxOffY, cropState.offY));
+}
+
+function onCropZoom(sliderVal){
+  // El slider va de 100 a 300 (%), se traduce a un factor sobre la escala mínima
+  const factor = Number(sliderVal) / 100;
+  cropState.scale = cropState.minScale * factor;
+  clampCropOffset();
+  renderCropTransform();
+}
+
+// Referencias a los listeners de window del editor de recorte, para poder quitarlos
+// y no acumularlos cada vez que se abre el modal (evita fugas y arrastres duplicados)
+let cropWindowListeners = null;
+
+function setupCropDragHandlers(){
+  const stage = document.getElementById('crop-stage');
+  if(!stage) return;
+
+  // Quitar listeners de una apertura anterior del editor, si quedaron
+  teardownCropDragHandlers();
+
+  const getPoint = (e)=> e.touches ? { x:e.touches[0].clientX, y:e.touches[0].clientY } : { x:e.clientX, y:e.clientY };
+
+  const onDown = (e)=>{
+    cropState.dragging = true;
+    const p = getPoint(e);
+    cropState.lastX = p.x; cropState.lastY = p.y;
+  };
+  const onMove = (e)=>{
+    if(!cropState.dragging) return;
+    e.preventDefault();
+    const p = getPoint(e);
+    cropState.offX += (p.x - cropState.lastX);
+    cropState.offY += (p.y - cropState.lastY);
+    cropState.lastX = p.x; cropState.lastY = p.y;
+    clampCropOffset();
+    renderCropTransform();
+  };
+  const onUp = ()=>{ cropState.dragging = false; };
+
+  stage.addEventListener('mousedown', onDown);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+  stage.addEventListener('touchstart', onDown, { passive:true });
+  stage.addEventListener('touchmove', onMove, { passive:false });
+  stage.addEventListener('touchend', onUp);
+
+  cropWindowListeners = { onMove, onUp };
+}
+
+function teardownCropDragHandlers(){
+  if(!cropWindowListeners) return;
+  window.removeEventListener('mousemove', cropWindowListeners.onMove);
+  window.removeEventListener('mouseup', cropWindowListeners.onUp);
+  cropWindowListeners = null;
+}
+
+async function confirmAvatarCrop(){
+  if(!cropState.img || !S.currentUser) return;
   const ind = document.getElementById('save-ind');
   try{
-    // Redimensionar a 200px y comprimir como JPEG para que quepa cómodo en Firestore (<1MB)
-    const dataUrl = await resizeImageToDataURL(input.files[0], 200, 0.8);
+    // Recortar exactamente lo que se ve dentro del marco circular a un canvas cuadrado.
+    // Se invierte la misma transformación que aplica renderCropTransform (left = CROP_BOX/2 - w/2 + offX)
+    // para hallar, en coordenadas de la imagen original, qué región cae dentro del círculo visible.
+    const scale = cropState.scale;
+    const w = cropState.img.naturalWidth * scale;
+    const h = cropState.img.naturalHeight * scale;
+    const left = CROP_BOX/2 - w/2 + cropState.offX;
+    const top = CROP_BOX/2 - h/2 + cropState.offY;
+    const sx = -left / scale;
+    const sy = -top / scale;
+    const sSize = CROP_BOX / scale;
 
-    // Comprobación de tamaño por seguridad (Firestore: límite 1MB por documento)
-    if(dataUrl.length > 700000){
-      alert('La imagen sigue siendo demasiado grande tras comprimirla. Prueba con otra foto.');
-      return;
-    }
+    const canvas = document.createElement('canvas');
+    const outSize = 400; // resolución del recorte; se comprime después
+    canvas.width = outSize; canvas.height = outSize;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(cropState.img, sx, sy, sSize, sSize, 0, 0, outSize, outSize);
 
-    S.users[S.currentUser] = S.users[S.currentUser] || { username:'', firstName:'', avatar:null };
-    S.users[S.currentUser].avatar = dataUrl;
-    save();
-    renderProfileInfo();
+    canvas.toBlob(async (blob)=>{
+      try{
+        const dataUrl = await resizeImageToDataURL(blob, 200, 0.8);
 
-    // Persistir en Firestore para que el resto de usuarios la vean
-    const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
-    await setDoc(doc(fbDb(), 'users', S.currentUser), { avatarUrl: dataUrl, updatedAt: Date.now() }, { merge: true });
+        // Comprobación de tamaño por seguridad (Firestore: límite 1MB por documento)
+        if(dataUrl.length > 700000){
+          alert('La imagen sigue siendo demasiado grande tras comprimirla. Prueba con otra foto.');
+          return;
+        }
 
-    if(ind){ ind.textContent='✅ Foto actualizada'; setTimeout(()=>{ if(ind) ind.textContent=''; }, 2000); }
-    // Refrescar tabla/ranking por si está abierta, para que se vea el cambio
-    renderRanking();
+        S.users[S.currentUser] = S.users[S.currentUser] || { username:'', firstName:'', avatar:null };
+        S.users[S.currentUser].avatar = dataUrl;
+        save();
+        closeModal();
+        renderProfileInfo();
+
+        // Persistir en Firestore para que el resto de usuarios la vean
+        const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+        await setDoc(doc(fbDb(), 'users', S.currentUser), { avatarUrl: dataUrl, updatedAt: Date.now() }, { merge: true });
+
+        if(ind){ ind.textContent='✅ Foto actualizada'; setTimeout(()=>{ if(ind) ind.textContent=''; }, 2000); }
+        renderRanking();
+      }catch(e){
+        console.error('confirmAvatarCrop (inner) error', e);
+        alert('Error al subir la foto: ' + (e?.message||String(e)));
+      }
+    }, 'image/jpeg', 0.9);
   }catch(e){
-    console.error('updateProfilePic error', e);
-    alert('Error al subir la foto: ' + (e?.message||String(e)));
+    console.error('confirmAvatarCrop error', e);
+    alert('Error al recortar la foto: ' + (e?.message||String(e)));
   }
 }
 
