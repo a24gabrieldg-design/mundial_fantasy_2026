@@ -2156,9 +2156,64 @@ function renderProfileInfo(){
   }
 }
 
-function updateProfilePic(input){
+// Redimensiona y comprime una imagen a un dataURL JPEG pequeño, para poder
+// guardarla en el documento de Firestore del usuario (límite de 1MB por documento).
+function resizeImageToDataURL(file, maxSize, quality){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = (e)=>{
+      const img = new Image();
+      img.onload = ()=>{
+        let { width, height } = img;
+        if(width > height){
+          if(width > maxSize){ height = Math.round(height * (maxSize/width)); width = maxSize; }
+        } else {
+          if(height > maxSize){ width = Math.round(width * (maxSize/height)); height = maxSize; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function updateProfilePic(input){
   if(!input.files[0]) return;
-  const r=new FileReader(); r.onload=e=>{S.users[S.currentUser].avatar=e.target.result;save();renderProfileInfo();}; r.readAsDataURL(input.files[0]);
+  if(!S.currentUser) return;
+  const ind = document.getElementById('save-ind');
+  try{
+    // Redimensionar a 200px y comprimir como JPEG para que quepa cómodo en Firestore (<1MB)
+    const dataUrl = await resizeImageToDataURL(input.files[0], 200, 0.8);
+
+    // Comprobación de tamaño por seguridad (Firestore: límite 1MB por documento)
+    if(dataUrl.length > 700000){
+      alert('La imagen sigue siendo demasiado grande tras comprimirla. Prueba con otra foto.');
+      return;
+    }
+
+    S.users[S.currentUser] = S.users[S.currentUser] || { username:'', firstName:'', avatar:null };
+    S.users[S.currentUser].avatar = dataUrl;
+    save();
+    renderProfileInfo();
+
+    // Persistir en Firestore para que el resto de usuarios la vean
+    const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    await setDoc(doc(fbDb(), 'users', S.currentUser), { avatarUrl: dataUrl, updatedAt: Date.now() }, { merge: true });
+
+    if(ind){ ind.textContent='✅ Foto actualizada'; setTimeout(()=>{ if(ind) ind.textContent=''; }, 2000); }
+    // Refrescar tabla/ranking por si está abierta, para que se vea el cambio
+    renderRanking();
+  }catch(e){
+    console.error('updateProfilePic error', e);
+    alert('Error al subir la foto: ' + (e?.message||String(e)));
+  }
 }
 
 async function saveProfileFirstName(){
