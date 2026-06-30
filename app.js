@@ -1858,10 +1858,11 @@ async function ensureLeaguePredictionsLoaded(leagueCode, memberUids){
 }
 
 async function ensureUsersLoaded(uids){
-
   try{
     const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
-    const need=(uids||[]).filter(uid=>uid&&!S.users?.[uid]);
+    // Cargar usuarios que no están en caché O que están en caché sin avatar (puede que
+    // hayan subido foto después de la primera carga, y el otro usuario nunca lo vería)
+    const need=(uids||[]).filter(uid=>uid&&(!S.users?.[uid] || S.users[uid].avatar===null));
     await Promise.all(need.map(async uid=>{
       const snap=await getDoc(doc(fbDb(),'users',uid));
       if(snap.exists()){
