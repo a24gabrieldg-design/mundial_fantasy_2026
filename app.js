@@ -9,7 +9,7 @@ const ADMIN_RESULT_DEFAULTS = {
   oneTeamGoalsNoExact: 1
 };
 
-const ADMIN_EMAIL = 'gabidubrag@gmail.com';
+const ADMIN_EMAIL = 'a24gabrieldg@iesantonlosada.gal';
 // Nota: las reglas Firestore deben permitir escrituras a Admin Total.
 // En app.js solo podemos identificar al admin por email; Firestore rules deben implementar la misma lógica.
 
