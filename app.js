@@ -185,6 +185,15 @@ function save(){
 }
 
 const getCurrentUserEmail = () => {
+  // Fuente de verdad: el email real de la sesión de Firebase Auth (igual que comprueban
+  // las reglas de Firestore con request.auth.token.email). Antes se usaba el campo
+  // 'username' guardado en Firestore, que puede desincronizarse del email real de login
+  // y causar que isTotalAdmin() falle aunque ADMIN_EMAIL esté bien configurado.
+  try {
+    const authEmail = fbAuth()?.currentUser?.email;
+    if (authEmail) return authEmail.trim();
+  } catch {}
+  // Fallback por si Auth aún no está listo en el primer render
   try { return (S.users?.[S.currentUser]?.username || '').trim(); } catch { return ''; }
 };
 const isTotalAdmin = () => {
