@@ -1199,16 +1199,23 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
   const closeDt=new Date(matchDt.getTime()-5*60*1000);
   const now=new Date();
 
-  // S.lockOverrides (Firestore, global para todos) tiene prioridad; fallback localStorage
-  // - Override a '1' (cerrar forzado): prioridad absoluta, cierra el partido aunque no haya llegado la hora.
-  // - Override a '0' (abrir forzado, p.ej. al fijar el cruce de equipos en eliminatorias):
-  //   solo mantiene el partido abierto ANTES de su hora de cierre real. Una vez se llega a esa
-  //   hora, el partido se cierra automáticamente igual, en vez de quedar abierto para siempre.
+  // Lógica de bloqueo (locked):
+  // - Override '1' (admin cerró manualmente): cerrado sin excepción.
+  // - Override '0' (admin abrió manualmente, ej. al fijar el cruce de un partido KO):
+  //     - Si hay fecha/hora real del partido (sd en S.schedule): abierto hasta que llegue esa hora.
+  //     - Si aún no hay fecha real: abierto (el admin lo abrió a propósito para que la gente prediga).
+  // - Sin override: cerrado si now >= closeDt Y hay fecha real (sd), o por m.locked si no la hay.
   const lockOverrideVal = S.lockOverrides?.[m.id] ?? localStorage.getItem(`wf26_forced_lock_${m.id}`);
   const hasForcedLock = lockOverrideVal !== null && lockOverrideVal !== undefined;
-  const forcedLock = hasForcedLock ? lockOverrideVal === '1' : null;
-  const isClosedByTime = now>=closeDt||m.locked;
-  const locked = forcedLock===true ? true : isClosedByTime;
+  const hasRealDate = !!(sd?.date && sd?.time);
+  const closedByTime = hasRealDate && now >= closeDt;
+  let locked;
+  if(hasForcedLock){
+    if(lockOverrideVal === '1') locked = true;                    // cerrar forzado: siempre cerrado
+    else locked = hasRealDate ? closedByTime : false;             // abrir forzado: respeta hora real si existe
+  } else {
+    locked = hasRealDate ? closedByTime : m.locked;              // sin override: tiempo real o placeholder
+  }
 
   // Decider aparece cuando el usuario predice empate en KO (antes del partido) o el resultado real es empate
   const userPg1 = p.g1!==''&&p.g1!==undefined&&p.g1!==null ? parseInt(p.g1) : null;
