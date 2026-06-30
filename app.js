@@ -2369,10 +2369,11 @@ async function confirmAvatarCrop(){
         renderProfileInfo();
 
         // Persistir en Firestore para que el resto de usuarios la vean
+        const sizeKB = Math.round(dataUrl.length / 1024);
         const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
         await setDoc(doc(fbDb(), 'users', S.currentUser), { avatarUrl: dataUrl, updatedAt: Date.now() }, { merge: true });
 
-        if(ind){ ind.textContent='✅ Foto actualizada'; setTimeout(()=>{ if(ind) ind.textContent=''; }, 2000); }
+        if(ind){ ind.textContent=`✅ Foto subida a la red (${sizeKB} KB)`; setTimeout(()=>{ if(ind) ind.textContent=''; }, 4000); }
         renderRanking();
       }catch(e){
         console.error('confirmAvatarCrop (inner) error', e);
@@ -2382,6 +2383,26 @@ async function confirmAvatarCrop(){
   }catch(e){
     console.error('confirmAvatarCrop error', e);
     alert('Error al recortar la foto: ' + (e?.message||String(e)));
+  }
+}
+
+async function reloadAllAvatars(){
+  const ind = document.getElementById('avatar-reload-ind');
+  if(ind) ind.textContent = 'Recargando...';
+  try{
+    // Borrar caché de avatares de todos los usuarios (excepto el propio, para no perderlo)
+    if(S.users){
+      Object.keys(S.users).forEach(uid=>{
+        if(uid !== S.currentUser) S.users[uid].avatar = null;
+      });
+    }
+    // Obtener UIDs de los miembros de la liga actual y recargarlos desde Firestore
+    const memberUids = S.currentLeague ? (S.leagues?.[S.currentLeague]?.members || []) : [];
+    await ensureUsersLoaded(memberUids);
+    renderRanking();
+    if(ind){ ind.textContent = '✅ Fotos actualizadas'; setTimeout(()=>{ if(ind) ind.textContent=''; }, 3000); }
+  }catch(e){
+    if(ind){ ind.textContent = '❌ Error: ' + (e?.message||String(e)); }
   }
 }
 
