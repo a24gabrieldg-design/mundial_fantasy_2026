@@ -1736,14 +1736,13 @@ function calcPoints(res, pred, mid){
     const userPredictsDraw = pg1===pg2;
 
     if(userPredictsDraw){
-      // El usuario predijo empate → aplica lógica de 8/10 pts
-      // Si no eligió ganador/fase, 0 pts
-      if(!userWinner || !userDecidedBy) return 0;
-      if(realWinner==='0') return 0; // admin no ha puesto ganador aún
-      let pts = 0;
-      if(String(userWinner)===String(realWinner)){
-        pts = 8;
-        if(String(userDecidedBy)===String(decidedBy)) pts = 10;
+      // El usuario predijo empate. El marcador exacto (1-1, 2-2, etc.) da un suelo de 7 pts.
+      // Si además acierta quién pasa, sube a 8; si también acierta cómo (ET/PEN), sube a 10.
+      const acertaMarcadorExacto = pg1===rg1 && pg2===rg2;
+      let pts = acertaMarcadorExacto ? 7 : 0;
+      if(realWinner!=='0' && userWinner && String(userWinner)===String(realWinner)){
+        pts = Math.max(pts, 8);
+        if(userDecidedBy && String(userDecidedBy)===String(decidedBy)) pts = 10;
       }
       return pts;
     } else {
