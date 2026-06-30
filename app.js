@@ -9,7 +9,7 @@ const ADMIN_RESULT_DEFAULTS = {
   oneTeamGoalsNoExact: 1
 };
 
-const ADMIN_EMAIL = 'a24gabrieldg@iesantonlosada.gal';
+const ADMIN_EMAIL = 'gabidubrag@gmail.com';
 // Nota: las reglas Firestore deben permitir escrituras a Admin Total.
 // En app.js solo podemos identificar al admin por email; Firestore rules deben implementar la misma lógica.
 
@@ -22,7 +22,7 @@ const fbStorage = () => getFB().storage;
 const GROUP_TEAMS = {
   A:[{f:'🇲🇽',n:'México'},{f:'🇿🇦',n:'Sudáfrica'},{f:'🇰🇷',n:'Corea del Sur'},{f:'🇨🇿',n:'República Checa'}],
   B:[{f:'🇨🇦',n:'Canadá'},{f:'🇧🇦',n:'Bosnia y Herzegovina'},{f:'🇶🇦',n:'Qatar'},{f:'🇨🇭',n:'Suiza'}],
-  C:[{f:'🇧🇷',n:'Brasil'},{f:'🇲🇦',n:'Marruecos'},{f:'🇭🇹',n:'Haití'},{f:'🏴󠁧󠁢󠁳󠁣󠁴󠁿',n:'Escocia'}],
+  C:[{f:'🇧🇷',n:'Brasil'},{f:'🇲🇦',n:'Marruecos'},{f:'🇭🇹',n:'Haití'},{f:'🏴',n:'Escocia'}],
   D:[{f:'🇺🇸',n:'Estados Unidos'},{f:'🇵🇾',n:'Paraguay'},{f:'🇦🇺',n:'Australia'},{f:'🇹🇷',n:'Turquía'}],
   E:[{f:'🇩🇪',n:'Alemania'},{f:'🇨🇼',n:'Curazao'},{f:'🇨🇮',n:'Costa de Marfil'},{f:'🇪🇨',n:'Ecuador'}],
   F:[{f:'🇳🇱',n:'Países Bajos'},{f:'🇯🇵',n:'Japón'},{f:'🇸🇪',n:'Suecia'},{f:'🇹🇳',n:'Túnez'}],
@@ -31,7 +31,7 @@ const GROUP_TEAMS = {
   I:[{f:'🇫🇷',n:'Francia'},{f:'🇸🇳',n:'Senegal'},{f:'🇮🇶',n:'Irak'},{f:'🇳🇴',n:'Noruega'}],
   J:[{f:'🇦🇷',n:'Argentina'},{f:'🇩🇿',n:'Argelia'},{f:'🇦🇹',n:'Austria'},{f:'🇯🇴',n:'Jordania'}],
   K:[{f:'🇵🇹',n:'Portugal'},{f:'🇨🇩',n:'R.D. Congo'},{f:'🇺🇿',n:'Uzbekistán'},{f:'🇨🇴',n:'Colombia'}],
-  L:[{f:'🏴󠁧󠁢󠁥󠁮󠁧󠁿',n:'Inglaterra'},{f:'🇭🇷',n:'Croacia'},{f:'🇬🇭',n:'Ghana'},{f:'🇵🇦',n:'Panamá'}]
+  L:[{f:'🏴',n:'Inglaterra'},{f:'🇭🇷',n:'Croacia'},{f:'🇬🇭',n:'Ghana'},{f:'🇵🇦',n:'Panamá'}]
 };
 
 // Lista plana de todos los equipos del torneo (para desplegables admin)
@@ -1201,7 +1201,10 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
   const userPredictsDraw = isKnockout && !locked && userPg1!==null && userPg2!==null && userPg1===userPg2;
 
   // ===== KO decider UI =====
-  const showR16Decider = isKnockout && (userPredictsDraw || (finished && realDraw90));
+  // Editable solo mientras el partido no esté bloqueado. Una vez cerrado/finalizado,
+  // se muestra en modo solo lectura (el usuario ya no puede cambiar quién pasa/cómo).
+  const showR16Decider = isKnockout && (userPredictsDraw || (locked && realDraw90));
+  const r16DeciderReadOnly = locked;
   const userWinner = p?.r16_winner || '';
   const userDecidedBy = p?.r16_decidedBy || '';
   const r16LocalActive = userWinner === '1' ? 'active' : '';
@@ -1229,7 +1232,7 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
         const rp=((S.predictions[S.currentLeague]||{})[mb])||{};
         const rpr=rp[m.id]||{g1:'',g2:''};
         const rprDisplay = isSwapped ? { g1: rpr.g2??'', g2: rpr.g1??'' } : rpr;
-        const rpts=calcPoints(res,rprDisplay);
+        const rpts=calcPoints(res,rprDisplay,m.id);
         return `<div class="rival-row"><span class="rival-name">${getDisplayName(mb)}</span><span class="rival-pred">${rprDisplay.g1!==''?rprDisplay.g1:'?'} - ${rprDisplay.g2!==''?rprDisplay.g2:'?'}</span><span class="rival-pts">+${rpts}</span></div>`;
       }).join('');
       if(rivalsData) resultRow+=`<button class="rivals-btn" onclick="toggleRivals('${m.id}')">👥 Ver predicciones rivales</button><div class="rivals-panel" id="rv-${m.id}">${rivalsData}</div>`;
@@ -1237,6 +1240,7 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
   }
 
   let adminRow='';
+  let adminR16Row='';
   if(isTotalAdmin()){
     const rg1=res?res.g1:''; const rg2=res?res.g2:'';
     adminRow=`<div class="admin-row">
@@ -1247,6 +1251,22 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
       <button class="btn-admin" onclick="adminSetResult('${m.id}')">Guardar</button>
       ${finished?`<button class="btn-admin" onclick="adminRecalc('${m.id}')" style="border-color:var(--success);color:var(--success)">Recalc</button>`:''}
     </div>`;
+
+    // Si el partido es KO y el resultado guardado (g1/g2) es empate, el admin debe fijar quién pasó y cómo
+    if(isKnockout && finished && realDraw90){
+      const admR16WinnerLocalActive = String(realWinner)==='1' ? 'active' : '';
+      const admR16WinnerAwayActive = String(realWinner)==='2' ? 'active' : '';
+      const admDecidedByETActive = decidedBy==='ET' ? 'active' : '';
+      const admDecidedByPENActive = decidedBy==='PEN' ? 'active' : '';
+      adminR16Row=`<div class="admin-row" style="flex-wrap:wrap;gap:6px">
+        <span style="font-size:10px;color:var(--admin);font-weight:700;width:100%">ADMIN — ¿Quién pasó? (empate ${rg1}-${rg2})</span>
+        <button class="btn-admin ${admR16WinnerLocalActive}" onclick="adminSetR16Result('${m.id}','winner','1')" style="flex:1">${mDisplay.n1}</button>
+        <button class="btn-admin ${admR16WinnerAwayActive}" onclick="adminSetR16Result('${m.id}','winner','2')" style="flex:1">${mDisplay.n2}</button>
+        <span style="font-size:10px;color:var(--admin);font-weight:700;width:100%">¿Cómo?</span>
+        <button class="btn-admin ${admDecidedByETActive}" onclick="adminSetR16Result('${m.id}','decidedBy','ET')" style="flex:1">Prórroga</button>
+        <button class="btn-admin ${admDecidedByPENActive}" onclick="adminSetR16Result('${m.id}','decidedBy','PEN')" style="flex:1">Penaltis</button>
+      </div>`;
+    }
   }
 
   const adminLockControls = isTotalAdmin() ? `
@@ -1276,18 +1296,19 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
       <div id="adm-ko-selects-${m.id}" style="display:none;width:100%;display:none;flex-wrap:wrap;gap:6px"></div>
     </div>` : '';
 
-  // Bloque KO decider: aparece si el usuario predice empate (antes) o el resultado real fue empate
+  // Bloque KO decider: editable mientras el usuario predice empate y el partido sigue abierto.
+  // Tras cerrarse (locked), se muestra en modo solo lectura con lo que el usuario predijo.
   const r16DeciderBlock = showR16Decider ? `
     <div class="r16-decider" id="r16d-${m.id}">
-      <div class="r16-decider-label">${finished ? '¿Quién pasó?' : '¿Quién pasa en caso de empate?'}</div>
+      <div class="r16-decider-label">${r16DeciderReadOnly ? 'Tu predicción: ¿quién pasaba?' : '¿Quién pasa en caso de empate?'}</div>
       <div class="r16-decider-row">
-        <button class="r16-btn ${r16LocalActive}" onclick="saveR16Pred('${m.id}','winner','1')">${mDisplay.n1}</button>
-        <button class="r16-btn ${r16AwayActive}" onclick="saveR16Pred('${m.id}','winner','2')">${mDisplay.n2}</button>
+        <button class="r16-btn ${r16LocalActive}" ${r16DeciderReadOnly?'disabled':`onclick="saveR16Pred('${m.id}','winner','1')"`}>${mDisplay.n1}</button>
+        <button class="r16-btn ${r16AwayActive}" ${r16DeciderReadOnly?'disabled':`onclick="saveR16Pred('${m.id}','winner','2')"`}>${mDisplay.n2}</button>
       </div>
       <div class="r16-decider-label" style="margin-top:8px">¿Cómo?${r16RealText}</div>
       <div class="r16-decider-row">
-        <button class="r16-btn ${r16ETActive}" onclick="saveR16Pred('${m.id}','decidedBy','ET')">Prórroga</button>
-        <button class="r16-btn ${r16PENActive}" onclick="saveR16Pred('${m.id}','decidedBy','PEN')">Penaltis</button>
+        <button class="r16-btn ${r16ETActive}" ${r16DeciderReadOnly?'disabled':`onclick="saveR16Pred('${m.id}','decidedBy','ET')"`}>Prórroga</button>
+        <button class="r16-btn ${r16PENActive}" ${r16DeciderReadOnly?'disabled':`onclick="saveR16Pred('${m.id}','decidedBy','PEN')"`}>Penaltis</button>
       </div>
     </div>` : '';
 
@@ -1306,7 +1327,7 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
       </div>
     </div>
     <div class="match-meta"><span>📅 ${fmtDate(sd?.date||m.date)} ${sd?.time||m.time}${m._phaseLabel?` · <span style="color:var(--text2);font-size:10px">${m._phaseLabel}</span>`:''}</span><span>${lockStr} ${predSmall}</span></div>
-    ${r16DeciderBlock}${resultRow}${adminRow}${adminLockControls}${adminScheduleRow}${adminKnockoutRow}
+    ${r16DeciderBlock}${resultRow}${adminRow}${adminR16Row}${adminLockControls}${adminScheduleRow}${adminKnockoutRow}
   </div>`;
 }
 
@@ -1425,6 +1446,14 @@ function updateKODeciderVisibility(mid){
 
 async function saveR16Pred(mid, field, value){
   if(!S.currentLeague) return;
+  // Defensa adicional: si el partido está cerrado (lock forzado a '1' o ya tiene resultado
+  // real con decidedBy/r16_winner fijado por el admin), no permitir que el usuario lo cambie.
+  // (El control principal es no renderizar el botón como clicable; esto es un respaldo.)
+  const lockOverrideVal = S.lockOverrides?.[mid] ?? localStorage.getItem(`wf26_forced_lock_${mid}`);
+  const isForcedClosed = (lockOverrideVal === '1');
+  const realRes = S.results[mid];
+  const realAlreadyDecided = realRes && realRes.r16_winner && realRes.decidedBy;
+  if(isForcedClosed || realAlreadyDecided) return;
   try{
     const { doc, setDoc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const predRef = doc(fbDb(), 'leagues', S.currentLeague, 'predictions', S.currentUser);
@@ -1449,7 +1478,14 @@ async function adminSetResult(mid){
   if(!S.currentLeague) return;
   try{
     const { doc, setDoc, getDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
-    const rg = { g1: parseInt(g1), g2: parseInt(g2) };
+    const newG1=parseInt(g1), newG2=parseInt(g2);
+    const isDraw = newG1===newG2;
+    // Preservar quién pasó / cómo si ya estaba fijado y el resultado sigue siendo empate;
+    // si el nuevo resultado ya no es empate, se limpian (ya no aplican)
+    const prevRes = S.results[mid] || {};
+    const rg = isDraw
+      ? { g1:newG1, g2:newG2, ...(prevRes.r16_winner?{r16_winner:prevRes.r16_winner}:{}) , ...(prevRes.decidedBy?{decidedBy:prevRes.decidedBy}:{}) }
+      : { g1:newG1, g2:newG2 };
 
     // 1) Guardar resultado en tournament/results (global para todas las ligas)
     const tournRef = doc(fbDb(), 'tournament', 'results');
@@ -1463,7 +1499,7 @@ async function adminSetResult(mid){
       const uid=dSnap.id;
       const data=dSnap.data()||{};
       const p=data[mid]||{g1:'',g2:''};
-      const pts=calcPoints(rg,p);
+      const pts=calcPoints(rg,p,mid);
       const updated = { ...data, [mid]: { ...p, points: pts } };
       // Calcular total acumulado (excluir _totalPts que no es una predicción)
       const totalPts = Object.entries(updated).reduce((acc,[k,v])=> k==='_totalPts'?acc : acc+(v?.points||0), 0);
@@ -1493,6 +1529,57 @@ async function adminSetResult(mid){
     const ind=document.getElementById('save-ind');
     if(ind){ind.textContent='✅ Resultado guardado';setTimeout(()=>{if(ind)ind.textContent='';},2000);}
   }catch(e){ console.error('adminSetResult error', e); }
+}
+
+// El admin fija el resultado REAL de quién pasó / cómo (prórroga o penaltis) cuando
+// el resultado a 90' fue empate. Esto es distinto de saveR16Pred, que guarda la
+// PREDICCIÓN del usuario; aquí se guarda en tournament/results (el resultado oficial)
+// y se recalculan los puntos de todas las predicciones de la liga.
+async function adminSetR16Result(mid, field, value){
+  if(!S.currentLeague) return;
+  const prevRes = S.results[mid];
+  if(!prevRes) return;
+  try{
+    const { doc, setDoc, getDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const fieldKey = field === 'winner' ? 'r16_winner' : 'decidedBy';
+    const rg = { ...prevRes, [fieldKey]: value };
+
+    // 1) Guardar en tournament/results (global para todas las ligas)
+    const tournRef = doc(fbDb(), 'tournament', 'results');
+    const tournSnap = await getDoc(tournRef);
+    const tournExisting = tournSnap.exists() ? (tournSnap.data()||{}) : {};
+    await setDoc(tournRef, { ...tournExisting, [mid]: rg }, { merge: false });
+
+    // 2) Recalcular puntos para TODAS las predicciones de la liga
+    const predSnaps = await getDocs(collection(fbDb(), 'leagues', S.currentLeague, 'predictions'));
+    await Promise.all(predSnaps.docs.map(async (dSnap)=>{
+      const uid=dSnap.id;
+      const data=dSnap.data()||{};
+      const p=data[mid]||{g1:'',g2:''};
+      const pts=calcPoints(rg,p,mid);
+      const updated = { ...data, [mid]: { ...p, points: pts } };
+      const totalPts = Object.entries(updated).reduce((acc,[k,v])=> k==='_totalPts'?acc : acc+(v?.points||0), 0);
+      updated._totalPts = totalPts;
+      await setDoc(
+        doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid),
+        updated,
+        { merge: false }
+      );
+    }));
+
+    // 3) Actualizar cache local y redibujar
+    S.results[mid]=rg;
+    S.adminResults = S.adminResults || {};
+    S.adminResults[mid] = rg;
+    localStorage.setItem('wf26_admin_results', JSON.stringify(S.adminResults));
+    Object.keys(S.predictions[S.currentLeague]||{}).forEach(uid=>{
+      if(uid !== S.currentUser) delete S.predictions[S.currentLeague][uid];
+    });
+    renderPhaseBody();
+    renderRanking();
+    const ind=document.getElementById('save-ind');
+    if(ind){ind.textContent='✅ Guardado';setTimeout(()=>{if(ind)ind.textContent='';},2000);}
+  }catch(e){ console.error('adminSetR16Result error', e); alert('Error: '+(e?.message||String(e))); }
 }
 
 async function forceToggleLock(mid, val){
@@ -1574,7 +1661,7 @@ async function adminRecalc(mid){
     await Promise.all(predSnaps.docs.map(async (dSnap)=>{
       const uid=dSnap.id, data=dSnap.data()||{};
       const p=data[mid]||{g1:'',g2:''};
-      const pts=calcPoints(rg,p);
+      const pts=calcPoints(rg,p,mid);
       const updated = {...data,[mid]:{...p,points:pts}};
       updated._totalPts = Object.values(updated).reduce((acc,v)=>acc+(v?.points||0),0);
       await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid), updated, {merge:false});
@@ -1626,11 +1713,13 @@ function calcPoints(res, pred, mid){
       }
       return pts;
     } else {
-      // El usuario NO predijo empate → puntuación estándar de grupos sobre los 90'
+      // El usuario NO predijo empate → puntuación estándar de grupos sobre los 90',
+      // pero el "ganador" a efectos de acertar resultado es el ganador FINAL del partido
+      // (tras prórroga/penaltis), no el de los 90' (que siempre sería 0-0 si es empate)
       if(pg1===rg1&&pg2===rg2) return 7; // exacto (imposible si real es empate y pred no lo es)
-      const realWin=rg1>rg2?1:(rg2>rg1?2:0);
+      const realWin = realWinner!=='0' ? Number(realWinner) : 0;
       const predWin=pg1>pg2?1:(pg2>pg1?2:0);
-      const acertaGanador=predWin===realWin;
+      const acertaGanador=realWin!==0 && predWin===realWin;
       const acertaG1=pg1===rg1, acertaG2=pg2===rg2;
       const aciertaAlgunGol=acertaG1||acertaG2;
       const aciertaAmbosGoles=acertaG1&&acertaG2;
@@ -2111,4 +2200,3 @@ if(window.__FIREBASE__?.db){
 } else {
   window.addEventListener('firebase-ready', onFirebaseReady, { once: true });
 }
-
