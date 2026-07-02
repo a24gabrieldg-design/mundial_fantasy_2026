@@ -1807,25 +1807,15 @@ function calcPoints(res, pred, mid){
   }
 
   if(isKO && !realDraw90){
-    // Resultado real NO fue empate en 90' → puntuación estándar
-    // Pero si el usuario predijo empate y eligió ganador/fase: 3 pts (ganador) o 6 pts (ganador+fase)
+    // Resultado real NO fue empate en 90' → puntuación estándar SIEMPRE.
+    // La lógica de "quién pasa"/prórroga (3/6 pts) solo aplica cuando el
+    // resultado real SÍ fue empate a 90' (bloque isKO && realDraw90 arriba).
+    // Si el usuario predijo empate pero el resultado real no lo fue, simplemente
+    // no acierta el ganador (predWin=0 nunca coincide con realWinner 1 o 2),
+    // y se puntúa igual que cualquier otra predicción según goles/ganador.
     if(pg1===null||pg2===null) return 0;
-    const userPredictsDraw = pg1===pg2;
     const realWinner = rg1>rg2?1:2; // siempre hay ganador en 90' aquí
-    const userWinner = pred.r16_winner ? String(pred.r16_winner) : null;
-    const userDecidedBy = pred.r16_decidedBy || null;
 
-    if(userPredictsDraw && userWinner){
-      // El usuario predijo empate pero el resultado no lo fue → 3 o 6 pts si acertó ganador
-      const userWinnerNum = String(userWinner) === '1' ? 1 : 2;
-      if(userWinnerNum === realWinner){
-        if(userDecidedBy && decidedBy && String(userDecidedBy)===String(decidedBy)) return 6;
-        return 3;
-      }
-      return 0;
-    }
-
-    // Predicción sin empate → lógica normal
     if(pg1===rg1&&pg2===rg2) return 7;
     const predWin=pg1>pg2?1:(pg2>pg1?2:0);
     const acertaGanador=predWin===realWinner;
