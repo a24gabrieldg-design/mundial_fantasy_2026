@@ -1733,41 +1733,77 @@ function calcPoints(res, pred, mid){
   const realDraw90 = rg1===rg2;
 
   if(isKO && realDraw90){
-    // El resultado real fue empate en 90' → se decide por prórroga o penaltis
-    const realWinner = res.r16_winner ? String(res.r16_winner) : '0'; // '1'|'2'
-    const userWinner = pred.r16_winner ? String(pred.r16_winner) : null;
-    const userDecidedBy = pred.r16_decidedBy || null; // 'ET'|'PEN'
+    // Resultado real empatado a 90' → se decide por prórroga o penaltis.
+    // Regla de puntos (según tu descripción):
+    // 1  => No acierta ganador, pero acierta los goles de un equipo
+    // 2  => Acierte ganador, pero no acierta goles de ningún equipo
+    // 3  => Acierte empatan (solo 90') pero no acierta goles de ningún equipo y acierta quien pasa (no fase)
+    // 4  => Acierte ganador y los goles de un equipo solo
+    // 6  => Acierte quien pasa (y en qué fase) pero no acierta goles de ningún equipo (y se acierta el empate en 90')
+    // 7  => Acierte el resultado exacto si no es empate
+    // 8  => (KO empate) Acierte resultado exacto + acierta quien gana pero no en qué fase
+    // 10 => (KO empate) Acierte resultado exacto + acierta quien gana y en qué fase
 
     if(pg1===null||pg2===null) return 0;
 
-    const userPredictsDraw = pg1===pg2;
+    const realWinner = res.r16_winner ? String(res.r16_winner) : null; // '1'|'2'
+    const userWinner = pred.r16_winner ? String(pred.r16_winner) : null;
+    const userDecidedBy = pred.r16_decidedBy || null; // 'ET'|'PEN'
 
-    if(userPredictsDraw){
-      // El usuario predijo empate. El marcador exacto (1-1, 2-2, etc.) da un suelo de 7 pts.
-      // Si además acierta quién pasa, sube a 8; si también acierta cómo (ET/PEN), sube a 10.
-      const acertaMarcadorExacto = pg1===rg1 && pg2===rg2;
-      let pts = acertaMarcadorExacto ? 7 : 0;
-      if(realWinner!=='0' && userWinner && String(userWinner)===String(realWinner)){
-        pts = Math.max(pts, 8);
-        if(userDecidedBy && String(userDecidedBy)===String(decidedBy)) pts = 10;
+    const predictedDraw = (pg1===pg2);
+    const predictedExactScore = (pg1===rg1 && pg2===rg2);
+
+    const predictedWinnerCorrect = (realWinner && userWinner && String(userWinner)===String(realWinner));
+    const predictedPhaseCorrect = (predictedWinnerCorrect && userDecidedBy && decidedBy && String(userDecidedBy)===String(decidedBy));
+
+    const acertaG1 = pg1===rg1;
+    const acertaG2 = pg2===rg2;
+    const aciertaAlgunGol = acertaG1 || acertaG2;
+    const aciertaAmbosGoles = acertaG1 && acertaG2;
+
+    // CASO A: el usuario predice empate en 90'
+    if(predictedDraw){
+      // 7 pts: resultado exacto en empate (marcador exacto)
+      // Pero en tu listado para KO empate has definido 8/10 para acertar ganador/fase.
+      if(predictedExactScore && !predictedWinnerCorrect){
+        // solo marcador exacto (sin acertar quién pasa)
+        return 7;
       }
-      return pts;
-    } else {
-      // El usuario NO predijo empate → puntuación estándar de grupos sobre los 90',
-      // pero el "ganador" a efectos de acertar resultado es el ganador FINAL del partido
-      // (tras prórroga/penaltis), no el de los 90' (que siempre sería 0-0 si es empate)
-      if(pg1===rg1&&pg2===rg2) return 7; // exacto (imposible si real es empate y pred no lo es)
-      const realWin = realWinner!=='0' ? Number(realWinner) : 0;
-      const predWin=pg1>pg2?1:(pg2>pg1?2:0);
-      const acertaGanador=realWin!==0 && predWin===realWin;
-      const acertaG1=pg1===rg1, acertaG2=pg2===rg2;
-      const aciertaAlgunGol=acertaG1||acertaG2;
-      const aciertaAmbosGoles=acertaG1&&acertaG2;
-      if(aciertaAlgunGol&&!aciertaAmbosGoles&&!acertaGanador) return 1;
-      if(acertaGanador&&!aciertaAlgunGol) return 2;
-      if(acertaGanador&&aciertaAlgunGol&&!aciertaAmbosGoles) return 4;
+      if(predictedExactScore && predictedWinnerCorrect && predictedPhaseCorrect){
+        return 10;
+      }
+      if(predictedExactScore && predictedWinnerCorrect && !predictedPhaseCorrect){
+        return 8;
+      }
+
+      // 3/6: acierta que empatan (90'), no acierta goles de ningún equipo,
+      // y acierta quién pasa (no fase / fase).
+      if(!aciertaAlgunGol){
+        if(predictedWinnerCorrect && predictedPhaseCorrect) return 6;
+        if(predictedWinnerCorrect && !predictedPhaseCorrect) return 3;
+      }
+
+      // resto cuando predice empate pero falla en goles/ganador
       return 0;
     }
+
+    // CASO B: el usuario NO predice empate en 90'
+    // Aquí aplicamos tu tabla de 1/2/4 para el 'ganador' (quién pasa en el KO final)
+    // y los goles de un equipo (marcador en 90').
+    // El 'ganador' se evalúa con el winner final (res.r16_winner), no con pg1/pg2.
+
+    // 2: acierta ganador pero no acierta goles de ningún equipo
+    if(predictedWinnerCorrect && !aciertaAlgunGol) return 2;
+
+    // 4: acierta ganador y los goles de un equipo solo
+    if(predictedWinnerCorrect && aciertaAlgunGol && !aciertaAmbosGoles) return 4;
+
+    // 1: no acierta ganador pero acierta los goles de un equipo
+    if(!predictedWinnerCorrect && aciertaAlgunGol && !aciertaAmbosGoles) return 1;
+
+    // Si acierta ambos goles (exacto de marcador) pero no predice empate,
+    // no corresponde a tu listado de KO empate; devolvemos 0.
+    return 0;
   }
 
   if(isKO && !realDraw90){
