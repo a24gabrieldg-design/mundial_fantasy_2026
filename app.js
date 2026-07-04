@@ -1536,7 +1536,7 @@ async function adminSetResult(mid){
   if(g1===''||g2==='') return;
   if(!S.currentLeague) return;
   try{
-    const { doc, setDoc, getDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const { doc, setDoc, getDoc, collection, getDocs, runTransaction } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const newG1=parseInt(g1), newG2=parseInt(g2);
     const isDraw = newG1===newG2;
     // Preservar quién pasó / cómo si ya estaba fijado y el resultado sigue siendo empate;
@@ -1546,28 +1546,32 @@ async function adminSetResult(mid){
       ? { g1:newG1, g2:newG2, ...(prevRes.r16_winner?{r16_winner:prevRes.r16_winner}:{}) , ...(prevRes.decidedBy?{decidedBy:prevRes.decidedBy}:{}) }
       : { g1:newG1, g2:newG2 };
 
-    // 1) Guardar resultado en tournament/results (global para todas las ligas)
+    // 1) Guardar resultado en tournament/results (global para todas las ligas).
+    // merge:true + solo el campo [mid]: así guardar un partido nunca puede pisar
+    // el resultado de otro partido, aunque se guarden casi a la vez.
     const tournRef = doc(fbDb(), 'tournament', 'results');
-    const tournSnap = await getDoc(tournRef);
-    const tournExisting = tournSnap.exists() ? (tournSnap.data()||{}) : {};
-    await setDoc(tournRef, { ...tournExisting, [mid]: rg }, { merge: false });
+    await setDoc(tournRef, { [mid]: rg }, { merge: true });
 
-    // 2) Recalcular points para TODAS las predicciones de la liga
+    // 2) Recalcular puntos para TODAS las predicciones de la liga.
+    // IMPORTANTE: se usa una transacción por documento de usuario, para que la
+    // lectura+escritura sea atómica. Esto es lo que garantiza que cada partido
+    // sea independiente: si dos partidos se guardan casi a la vez, cada
+    // transacción lee el estado más reciente justo antes de escribir, en vez de
+    // basarse en una foto tomada al principio de la función (que era lo que
+    // causaba que guardar un partido "revirtiera" el resultado recién guardado
+    // de otro).
     const predSnaps = await getDocs(collection(fbDb(), 'leagues', S.currentLeague, 'predictions'));
     await Promise.all(predSnaps.docs.map(async (dSnap)=>{
       const uid=dSnap.id;
-      const data=dSnap.data()||{};
-      const p=data[mid]||{g1:'',g2:''};
-      const pts=calcPoints(rg,p,mid);
-      const updated = { ...data, [mid]: { ...p, points: pts } };
-      // Calcular total acumulado (excluir _totalPts que no es una predicción)
-      const totalPts = Object.entries(updated).reduce((acc,[k,v])=> k==='_totalPts'?acc : acc+(v?.points||0), 0);
-      updated._totalPts = totalPts;
-      await setDoc(
-        doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid),
-        updated,
-        { merge: false }
-      );
+      const ref = doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid);
+      await runTransaction(fbDb(), async (tx)=>{
+        const snap = await tx.get(ref);
+        const data = snap.exists() ? (snap.data()||{}) : {};
+        const p=data[mid]||{g1:'',g2:''};
+        const pts=calcPoints(rg,p,mid);
+        const totalPts = Object.entries(data).reduce((acc,[k,v])=> (k===mid||k==='_totalPts') ? acc : acc+(v?.points||0), 0) + pts;
+        tx.set(ref, { [mid]: { ...p, points: pts }, _totalPts: totalPts }, { merge: true });
+      });
     }));
 
     // 3) Limpiar cache de otros usuarios y redibujar
@@ -1599,31 +1603,30 @@ async function adminSetR16Result(mid, field, value){
   const prevRes = S.results[mid];
   if(!prevRes) return;
   try{
-    const { doc, setDoc, getDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const { doc, setDoc, getDoc, collection, getDocs, runTransaction } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const fieldKey = field === 'winner' ? 'r16_winner' : 'decidedBy';
     const rg = { ...prevRes, [fieldKey]: value };
 
-    // 1) Guardar en tournament/results (global para todas las ligas)
+    // 1) Guardar en tournament/results (global para todas las ligas).
+    // merge:true + solo [mid]: aislar este partido de cualquier otro guardado en paralelo.
     const tournRef = doc(fbDb(), 'tournament', 'results');
-    const tournSnap = await getDoc(tournRef);
-    const tournExisting = tournSnap.exists() ? (tournSnap.data()||{}) : {};
-    await setDoc(tournRef, { ...tournExisting, [mid]: rg }, { merge: false });
+    await setDoc(tournRef, { [mid]: rg }, { merge: true });
 
-    // 2) Recalcular puntos para TODAS las predicciones de la liga
+    // 2) Recalcular puntos para TODAS las predicciones de la liga, con una
+    // transacción por usuario para que la lectura+escritura sea atómica y no
+    // pueda pisar el resultado de otro partido guardado a la vez.
     const predSnaps = await getDocs(collection(fbDb(), 'leagues', S.currentLeague, 'predictions'));
     await Promise.all(predSnaps.docs.map(async (dSnap)=>{
       const uid=dSnap.id;
-      const data=dSnap.data()||{};
-      const p=data[mid]||{g1:'',g2:''};
-      const pts=calcPoints(rg,p,mid);
-      const updated = { ...data, [mid]: { ...p, points: pts } };
-      const totalPts = Object.entries(updated).reduce((acc,[k,v])=> k==='_totalPts'?acc : acc+(v?.points||0), 0);
-      updated._totalPts = totalPts;
-      await setDoc(
-        doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid),
-        updated,
-        { merge: false }
-      );
+      const ref = doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid);
+      await runTransaction(fbDb(), async (tx)=>{
+        const snap = await tx.get(ref);
+        const data = snap.exists() ? (snap.data()||{}) : {};
+        const p=data[mid]||{g1:'',g2:''};
+        const pts=calcPoints(rg,p,mid);
+        const totalPts = Object.entries(data).reduce((acc,[k,v])=> (k===mid||k==='_totalPts') ? acc : acc+(v?.points||0), 0) + pts;
+        tx.set(ref, { [mid]: { ...p, points: pts }, _totalPts: totalPts }, { merge: true });
+      });
     }));
 
     // 3) Actualizar cache local y redibujar
@@ -1670,24 +1673,28 @@ async function adminClearResult(mid){
   if(!S.currentLeague) return;
   if(!confirm('¿Borrar el resultado de este partido? Los puntos calculados se perderán.')) return;
   try{
-    const { doc, setDoc, getDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const { doc, setDoc, getDoc, collection, getDocs, runTransaction } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
 
-    // 1) Marcar como vetado en tournament/results (global)
+    // 1) Marcar como vetado en tournament/results (global).
+    // merge:true + solo [mid]: no toca el resultado de ningún otro partido.
     const tournRef2 = doc(fbDb(), 'tournament', 'results');
-    const tournSnap2 = await getDoc(tournRef2);
-    const tournExisting2 = tournSnap2.exists() ? (tournSnap2.data()||{}) : {};
-    await setDoc(tournRef2, { ...tournExisting2, [mid]: { vetoed: true } }, { merge: false });
+    await setDoc(tournRef2, { [mid]: { vetoed: true } }, { merge: true });
 
-    // 2) Limpiar el campo points de ese partido en todas las predicciones
+    // 2) Limpiar el campo points de ese partido en todas las predicciones,
+    // con una transacción por usuario para que sea atómico frente a otros
+    // guardados/borrados concurrentes de otros partidos.
     const predSnaps = await getDocs(collection(fbDb(), 'leagues', S.currentLeague, 'predictions'));
     await Promise.all(predSnaps.docs.map(async (dSnap)=>{
       const uid = dSnap.id;
-      const data = dSnap.data() || {};
-      if(!data[mid]) return;
-      const { points: _removed, ...predWithoutPts } = data[mid];
-      const updated = { ...data, [mid]: predWithoutPts };
-      updated._totalPts = Object.entries(updated).reduce((acc,[k,v])=> k==='_totalPts'?acc : acc+(v?.points||0), 0);
-      await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid), updated, { merge: false });
+      const ref = doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid);
+      await runTransaction(fbDb(), async (tx)=>{
+        const snap = await tx.get(ref);
+        const data = snap.exists() ? (snap.data()||{}) : {};
+        if(!data[mid]) return;
+        const { points: _removed, ...predWithoutPts } = data[mid];
+        const totalPts = Object.entries(data).reduce((acc,[k,v])=> (k===mid||k==='_totalPts') ? acc : acc+(v?.points||0), 0);
+        tx.set(ref, { [mid]: predWithoutPts, _totalPts: totalPts }, { merge: true });
+      });
     }));
 
     // 3) Actualizar cache local
@@ -1711,19 +1718,23 @@ async function adminClearResult(mid){
 async function adminRecalc(mid){
   if(!S.currentLeague) return;
   try{
-    const { doc, getDoc, setDoc, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const { doc, getDoc, setDoc, collection, getDocs, runTransaction } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const resSnap = await getDoc(doc(fbDb(), 'tournament', 'results'));
     const allResults = resSnap.exists() ? (resSnap.data()||{}) : {};
     const rg = allResults[mid];
     if(!rg || rg.vetoed) return;
     const predSnaps = await getDocs(collection(fbDb(), 'leagues', S.currentLeague, 'predictions'));
     await Promise.all(predSnaps.docs.map(async (dSnap)=>{
-      const uid=dSnap.id, data=dSnap.data()||{};
-      const p=data[mid]||{g1:'',g2:''};
-      const pts=calcPoints(rg,p,mid);
-      const updated = {...data,[mid]:{...p,points:pts}};
-      updated._totalPts = Object.values(updated).reduce((acc,v)=>acc+(v?.points||0),0);
-      await setDoc(doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid), updated, {merge:false});
+      const uid=dSnap.id;
+      const ref = doc(fbDb(), 'leagues', S.currentLeague, 'predictions', uid);
+      await runTransaction(fbDb(), async (tx)=>{
+        const snap = await tx.get(ref);
+        const data = snap.exists() ? (snap.data()||{}) : {};
+        const p=data[mid]||{g1:'',g2:''};
+        const pts=calcPoints(rg,p,mid);
+        const totalPts = Object.entries(data).reduce((acc,[k,v])=> (k===mid||k==='_totalPts') ? acc : acc+(v?.points||0), 0) + pts;
+        tx.set(ref, { [mid]: {...p, points: pts}, _totalPts: totalPts }, { merge: true });
+      });
     }));
     Object.keys(S.predictions[S.currentLeague]||{}).forEach(uid=>{
       if(uid !== S.currentUser) delete S.predictions[S.currentLeague][uid];
