@@ -81,15 +81,22 @@ const MATCHES_GROUP = makeGroupMatches();
 // Bracket real de 32 equipos clasificados a eliminatorias (48 equipos, top2 + 8 mejores 3os):
 // Dieciseisavos (32→16, 16 partidos) → Octavos (16→8, 8 partidos) → Cuartos (8→4, 4 partidos)
 // → Semifinales (4→2, 2 partidos) → 3er y 4to puesto (1 partido) → Final (1 partido).
-// Los prefijos de id (R16_, QF_, SF_) se mantienen sin cambios respecto a versiones anteriores
-// para no invalidar predicciones/resultados ya guardados con esos ids.
+// IMPORTANTE: cada fase tiene su PROPIO número de fase incrustado en el prefijo del id
+// (KO1_, KO2_, KO3_, KO4_, KO5_, KO6_). Antes los prefijos eran genéricos (R16_, QF_, SF_...)
+// y no llevaban el número de fase, así que si un cruce se guardaba mal en la fase
+// equivocada (p.ej. por un bug de posición/índice), podía terminar con el mismo id que
+// un partido real de OTRA fase — y como el id es la clave de guardado, los dos partidos
+// pasaban a compartir resultado y predicciones. Con el número de fase dentro del propio
+// id, un partido de Octavos JAMÁS puede tener el mismo id que uno de Dieciseisavos,
+// aunque los datos guardados estén corruptos o desordenados: cada botón/casilla de cada
+// partido de cada fase es único de verdad.
 const KNOCKOUT_TEMPLATES = {
-  1: Array.from({length:16},(_,i)=>({id:`R16_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-04',time:'18:00',locked:true})),
-  2: Array.from({length:8},(_,i)=>({id:`QF_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-11',time:'18:00',locked:true})),
-  3: Array.from({length:4},(_,i)=>({id:`SF_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-14',time:'18:00',locked:true})),
-  4: Array.from({length:2},(_,i)=>({id:`SEMI_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-15',time:'18:00',locked:true})),
-  5: [{id:'TPP_1',n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-18',time:'18:00',locked:true}],
-  6: [{id:'FIN_1',n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-19',time:'18:00',locked:true}]
+  1: Array.from({length:16},(_,i)=>({id:`KO1_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-04',time:'18:00',locked:true})),
+  2: Array.from({length:8},(_,i)=>({id:`KO2_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-11',time:'18:00',locked:true})),
+  3: Array.from({length:4},(_,i)=>({id:`KO3_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-14',time:'18:00',locked:true})),
+  4: Array.from({length:2},(_,i)=>({id:`KO4_${i+1}`,n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-15',time:'18:00',locked:true})),
+  5: [{id:'KO5_1',n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-18',time:'18:00',locked:true}],
+  6: [{id:'KO6_1',n1:'Por definir',n2:'Por definir',t1:'❓',t2:'❓',date:'2026-07-19',time:'18:00',locked:true}]
 };
 
 function storageKey_(uid, key){
@@ -406,7 +413,7 @@ async function fetchTournamentOverrides(){
 // Admin: repara ids de cruces KO corruptos/duplicados entre fases.
 // PROBLEMA DETECTADO: en 'tournament/knockout_overrides', algunos partidos de una fase
 // quedaron guardados con un 'id' que coincide con el de un partido de OTRA fase
-// (p.ej. un partido de Octavos guardado con id 'R16_14', el mismo id que un partido
+// (p.ej. un partido de Octavos guardado con id 'KO1_14' -antiguo esquema: 'R16_14'-, el mismo id que un partido
 // real de Dieciseisavos — o al revés, un partido de Dieciseisavos guardado con un id
 // de Octavos/Cuartos/etc). Como el 'id' es la clave que se usa para guardar resultados
 // y predicciones, dos partidos con el mismo id comparten literalmente el mismo
@@ -1246,7 +1253,7 @@ async function adminSwapTeams(mid){
 }
 
 function matchCardHTML(m, preds, isKnockout, koPhase){
-  const isR16 = String(m.id||'').startsWith('R16_');
+  const isR16 = String(m.id||'').startsWith('KO1_');
 
   // Aplicar swap si el admin lo ha marcado (intercambia local y visitante)
   const isSwapped = !!(S.swappedMatches?.[m.id]);
@@ -1893,7 +1900,7 @@ async function adminSaveNewMatch(){
   try{
     const team1 = ALL_TEAMS.find(t => t.n === n1);
     const team2 = ALL_TEAMS.find(t => t.n === n2);
-    const newId = `${group}_X${Date.now()}`; // prefijo _X para no colisionar nunca con ids oficiales (g+n) o KO (R16_/QF_/SF_/SEMI_/TPP_/FIN_)
+    const newId = `${group}_X${Date.now()}`; // prefijo _X para no colisionar nunca con ids oficiales (g+n) o KO (KO1_/KO2_/KO3_/KO4_/KO5_/KO6_)
     const newMatch = { id:newId, t1: team1?.f||'🏳️', n1, t2: team2?.f||'🏳️', n2, date:dateVal, time:timeVal, locked:false };
     const { doc, getDoc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const ref = doc(fbDb(), 'tournament', 'custom_matches');
@@ -1923,11 +1930,7 @@ function calcPoints(res, pred, mid){
   const pg2=pred.g2!==''&&pred.g2!==undefined&&pred.g2!==null?parseInt(pred.g2):null;
 
   // ===== Partidos KO: lógica especial cuando el resultado real es empate a 90' =====
-  const isKO = mid && (
-    String(mid).startsWith('R16_') || String(mid).startsWith('QF_') ||
-    String(mid).startsWith('SF_') || String(mid).startsWith('SEMI_') ||
-    String(mid).startsWith('TPP_') || String(mid).startsWith('FIN_')
-  );
+  const isKO = mid && /^KO[1-6]_/.test(String(mid));
   const decidedBy = res.decidedBy || null; // 'ET' | 'PEN'
   const realDraw90 = rg1===rg2;
 
