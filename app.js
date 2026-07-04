@@ -112,8 +112,12 @@ let S = {
   schedule: JSON.parse(localStorage.getItem('wf26_sched')||'{}'),
   // resultados forzados por admin: cache permanente, nunca machacado por polling
   adminResults: JSON.parse(localStorage.getItem('wf26_admin_results')||'{}'),
-  // partidos vetados por admin (borrados manualmente): la API no puede sobreescribirlos
+  // partidos vetados por admin (resultado borrado manualmente)
   vetoed: JSON.parse(localStorage.getItem('wf26_vetoed')||'{}'),
+  // partidos eliminados por completo por el admin (no se muestran en ninguna vista) { [mid]: true }
+  deletedMatches: JSON.parse(localStorage.getItem('wf26_deleted_matches')||'{}'),
+  // partidos añadidos manualmente por el admin, agrupados por grupo { [group]: [match, ...] }
+  customMatches: JSON.parse(localStorage.getItem('wf26_custom_matches')||'{}'),
   // lock manual por admin { [mid]: '0'|'1' } — prioridad sobre tiempo; sincronizado con Firestore
   lockOverrides: JSON.parse(localStorage.getItem('wf26_lock_overrides')||'{}'),
   // partidos con equipos intercambiados por admin { [mid]: true }
@@ -187,6 +191,24 @@ function save(){
   localStorage.setItem('wf26_swapped',JSON.stringify(S.swappedMatches||{}));
   localStorage.setItem('wf26_sched_overrides',JSON.stringify(S.scheduleOverrides||{}));
   localStorage.setItem('wf26_ko_overrides',JSON.stringify(S.knockoutOverrides||{}));
+  localStorage.setItem('wf26_deleted_matches',JSON.stringify(S.deletedMatches||{}));
+  localStorage.setItem('wf26_custom_matches',JSON.stringify(S.customMatches||{}));
+}
+
+// Devuelve los partidos "reales" de un grupo: los de calendario oficial + los añadidos por el
+// admin para ese grupo, excluyendo cualquier partido marcado como eliminado por el admin.
+// Usar SIEMPRE esta función (en vez de MATCHES_GROUP[g] directamente) para listar partidos de un grupo.
+function getGroupMatches(g){
+  const base = MATCHES_GROUP[g] || [];
+  const custom = (S.customMatches && S.customMatches[g]) || [];
+  const all = [...base, ...custom];
+  return all.filter(m => !(S.deletedMatches && S.deletedMatches[m.id]));
+}
+
+// Devuelve los partidos de una fase KO excluyendo los eliminados por el admin.
+function getKOMatches(phase){
+  const all = S.knockoutMatches[phase] || KNOCKOUT_TEMPLATES[phase] || [];
+  return all.filter(m => !(S.deletedMatches && S.deletedMatches[m.id]));
 }
 
 const getCurrentUserEmail = () => {
@@ -323,27 +345,9 @@ async function doLogout(){
   }
 }
 
-const RESULTS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzFtr_v_UbmNoS-7vtlaqFz2ObHyYFmMBXK6WGH2fygBkGeu8ywgbIJ0slk9EaVEs9Xfg/exec';
-let autoResultsTimer = null;
-
-async function fetchResultsFromSheet(){
-  try{
-    const r = await fetch(RESULTS_ENDPOINT, { cache: 'no-store' });
-    const data = await r.json();
-    const resultsMap = data?.results || {};
-    const nextResults = {};
-    Object.keys(resultsMap).forEach(mid=>{
-      const it = resultsMap[mid] || {};
-      const g1 = it.g1, g2 = it.g2;
-      if(g1===null||g1===undefined||g2===null||g2===undefined) return;
-      nextResults[mid] = { g1: Number(g1), g2: Number(g2) };
-    });
-    return { results: nextResults, schedule: data?.schedule || {} };
-  }catch(e){
-    console.error('fetchResultsFromSheet error', e);
-    return null;
-  }
-}
+// NOTA: la API externa (Google Sheets) se ha eliminado por completo. Los resultados y horarios
+// del torneo son EXCLUSIVAMENTE los que introduce el Admin Total desde esta app (guardados en
+// Firestore, colección 'tournament'). Ningún resultado puede aparecer si el admin no lo ha fijado.
 
 // Carga resultados forzados y vetos del admin desde tournament/results (global, igual para todas las ligas).
 async function fetchAdminResultsFromFirestore(){
@@ -374,20 +378,26 @@ async function fetchAdminResultsFromFirestore(){
 async function fetchTournamentOverrides(){
   try{
     const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
-    const [schedSnap, koSnap, lockSnap, swapSnap] = await Promise.all([
+    const [schedSnap, koSnap, lockSnap, swapSnap, delSnap, customSnap] = await Promise.all([
       getDoc(doc(fbDb(), 'tournament', 'schedule_overrides')),
       getDoc(doc(fbDb(), 'tournament', 'knockout_overrides')),
       getDoc(doc(fbDb(), 'tournament', 'lock_overrides')),
-      getDoc(doc(fbDb(), 'tournament', 'swapped_matches'))
+      getDoc(doc(fbDb(), 'tournament', 'swapped_matches')),
+      getDoc(doc(fbDb(), 'tournament', 'deleted_matches')),
+      getDoc(doc(fbDb(), 'tournament', 'custom_matches'))
     ]);
     S.scheduleOverrides = schedSnap.exists() ? (schedSnap.data()||{}) : (S.scheduleOverrides||{});
     S.knockoutOverrides = koSnap.exists() ? (koSnap.data()||{}) : (S.knockoutOverrides||{});
     S.lockOverrides = lockSnap.exists() ? (lockSnap.data()||{}) : (S.lockOverrides||{});
     S.swappedMatches = swapSnap.exists() ? (swapSnap.data()||{}) : (S.swappedMatches||{});
+    S.deletedMatches = delSnap.exists() ? (delSnap.data()||{}) : (S.deletedMatches||{});
+    S.customMatches = customSnap.exists() ? (customSnap.data()||{}) : (S.customMatches||{});
     localStorage.setItem('wf26_sched_overrides', JSON.stringify(S.scheduleOverrides));
     localStorage.setItem('wf26_ko_overrides', JSON.stringify(S.knockoutOverrides));
     localStorage.setItem('wf26_lock_overrides', JSON.stringify(S.lockOverrides));
     localStorage.setItem('wf26_swapped', JSON.stringify(S.swappedMatches));
+    localStorage.setItem('wf26_deleted_matches', JSON.stringify(S.deletedMatches));
+    localStorage.setItem('wf26_custom_matches', JSON.stringify(S.customMatches));
   }catch(e){
     console.error('fetchTournamentOverrides error', e);
   }
@@ -549,76 +559,56 @@ function startRealtimeTournament(){
       (err) => console.error('onSnapshot swapped_matches error', err)
     );
 
+    // 6) Partidos eliminados por el admin (se ocultan en cuanto se marcan, para todos)
+    _unsubTournament.deleted = onSnapshot(
+      doc(fbDb(), 'tournament', 'deleted_matches'),
+      (snap) => {
+        S.deletedMatches = snap.exists() ? (snap.data()||{}) : {};
+        localStorage.setItem('wf26_deleted_matches', JSON.stringify(S.deletedMatches));
+        save(); renderPhaseBody(); renderPredTab(); renderGruposTab();
+      },
+      (err) => console.error('onSnapshot deleted_matches error', err)
+    );
+
+    // 7) Partidos añadidos manualmente por el admin
+    _unsubTournament.custom = onSnapshot(
+      doc(fbDb(), 'tournament', 'custom_matches'),
+      (snap) => {
+        S.customMatches = snap.exists() ? (snap.data()||{}) : {};
+        localStorage.setItem('wf26_custom_matches', JSON.stringify(S.customMatches));
+        save(); renderPhaseBody(); renderPredTab(); renderGruposTab();
+      },
+      (err) => console.error('onSnapshot custom_matches error', err)
+    );
+
   }).catch(e => console.error('startRealtimeTournament import error', e));
 }
 
+// Carga inicial de resultados/horarios/cruces + arranque de los listeners en tiempo real.
+// IMPORTANTE: ya NO existe ninguna API externa de resultados. Los únicos resultados que
+// puede ver cualquier usuario son los que el Admin Total ha introducido y guardado en
+// Firestore ('tournament/results'). Sin admin no hay resultado, punto.
 async function startAutoUpdateResults(){
   console.log('[wf26] startAutoUpdateResults');
-  if(autoResultsTimer) clearInterval(autoResultsTimer);
 
-  // Carga inicial: API + Firestore en paralelo
-  const [first] = await Promise.all([fetchResultsFromSheet(), fetchAdminResultsFromFirestore(), fetchTournamentOverrides()]);
-  if(first){
-    // El schedule de la API es la base; los overrides de admin tienen prioridad
-    S.schedule = { ...(first.schedule||{}), ...(S.scheduleOverrides||{}) };
-    // adminResults ya actualizó S.adminResults internamente
-    // Filtrar de la API los partidos vetados antes del merge inicial
-    const initApiResults = first.results || {};
-    Object.keys(S.vetoed||{}).forEach(mid => delete initApiResults[mid]);
-    S.results = { ...initApiResults, ...(S.adminResults||{}) };
-    // Aplicar cruces de knockout definidos por admin
-    Object.keys(S.knockoutOverrides||{}).forEach(phase=>{
-      S.knockoutMatches[phase] = S.knockoutOverrides[phase];
-    });
-    save();
-    renderPredTab();
-    renderRanking();
-    renderPhaseBody();
-  }
+  await Promise.all([fetchAdminResultsFromFirestore(), fetchTournamentOverrides()]);
 
-  // Listener en tiempo real para resultados admin — actualiza inmediatamente sin esperar polling
+  // El horario es siempre: fecha/hora base del partido, salvo que el admin la haya forzado
+  S.schedule = { ...(S.scheduleOverrides||{}) };
+  // Los resultados son EXCLUSIVAMENTE los del admin (adminResults ya excluye los vetados)
+  S.results = { ...(S.adminResults||{}) };
+  // Aplicar cruces de knockout definidos por admin
+  Object.keys(S.knockoutOverrides||{}).forEach(phase=>{
+    S.knockoutMatches[phase] = S.knockoutOverrides[phase];
+  });
+  save();
+  renderPredTab();
+  renderRanking();
+  renderPhaseBody();
+
+  // Listener en tiempo real: cualquier cambio del admin (resultado, horario, cruce, swap,
+  // partido añadido/eliminado) se refleja al instante en todos los dispositivos, sin polling.
   startRealtimeTournament();
-
-  autoResultsTimer = setInterval(async ()=>{
-    // Esperar API y Firestore juntos para que el merge siempre use datos frescos
-    const [next] = await Promise.all([
-      fetchResultsFromSheet(),
-      fetchAdminResultsFromFirestore(),
-      fetchTournamentOverrides()
-    ]);
-    if(!next) return;
-    // Filtrar de la API los partidos vetados por admin antes del merge
-    const apiResults = next.results || {};
-    Object.keys(S.vetoed||{}).forEach(mid => delete apiResults[mid]);
-    const nextResults = { ...apiResults, ...(S.adminResults||{}) };
-    // El schedule forzado por admin tiene prioridad sobre el de la API
-    const nextSchedule = { ...(next.schedule||{}), ...(S.scheduleOverrides||{}) };
-    const prev = S.results || {};
-    const changed = Object.keys(nextResults).some(mid=>{
-      const a=nextResults[mid]||{}, b=prev[mid]||{};
-      return Number(a.g1)!==Number(b.g1)||Number(a.g2)!==Number(b.g2);
-    }) || Object.keys(nextResults).length !== Object.keys(prev).length;
-    const prevSched = S.schedule || {};
-    const schedChanged = Object.keys(nextSchedule).some(mid=>{
-      const a=nextSchedule[mid]||{}, b=prevSched[mid]||{};
-      return a.date!==b.date||a.time!==b.time;
-    }) || Object.keys(prevSched).length !== Object.keys(nextSchedule).length;
-    if(!changed && !schedChanged) return;
-    S.results = nextResults;
-    S.schedule = nextSchedule;
-    Object.keys(S.knockoutOverrides||{}).forEach(phase=>{
-      S.knockoutMatches[phase] = S.knockoutOverrides[phase];
-    });
-    Object.keys(S.predictions||{}).forEach(leagueCode=>{
-      Object.keys(S.predictions[leagueCode]||{}).forEach(uid=>{
-        if(uid !== S.currentUser) delete S.predictions[leagueCode][uid];
-      });
-    });
-    save();
-    renderPhaseBody();
-    renderPredTab();
-    renderRanking();
-  }, 15000);
 }
 
 function showMain(){
@@ -680,6 +670,27 @@ function openModal(type, extra){
       let av=l.avatar?`<img src="${l.avatar}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`:`<span style="font-size:16px">🏆</span>`;
       return `<div class="league-pick-item" onclick="pickLeagueForPreds('${c}')"><div class="league-pick-avatar">${av}</div><div><div style="font-size:13px;font-weight:600">${l.name}</div><div style="font-size:11px;color:var(--text2)">${l.members.length} miembros</div></div></div>`;
     }).join('');
+  } else if(type==='add-match'){
+    if(!isTotalAdmin()) return;
+    const inputStyle='width:100%;padding:8px;border-radius:8px;background:var(--bg3);color:var(--text);border:1px solid var(--border);font-size:13px';
+    const groupOptionsHtml = GROUPS.map(g=>`<option value="${g}" ${g===S.currentGroup?'selected':''}>Grupo ${g}</option>`).join('');
+    const deleted = getDeletedMatchesInfo(S.currentGroup);
+    const deletedHtml = deleted.length ? `
+      <div class="modal-field"><label>Partidos eliminados en Grupo ${S.currentGroup}</label>
+        ${deleted.map(m=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;font-size:12px">
+          <span>${m.t1} ${m.n1} - ${m.t2} ${m.n2}</span>
+          <button class="btn-admin" onclick="adminRestoreMatch('${m.id}');openModal('add-match')" style="border-color:var(--success);color:var(--success)">↩ Restaurar</button>
+        </div>`).join('')}
+      </div>` : '';
+    mc.innerHTML=`<div class="modal-title">➕ Añadir partido</div>
+    <div class="modal-field"><label>Grupo</label><select id="adm-new-group" style="${inputStyle}">${groupOptionsHtml}</select></div>
+    <div class="modal-field"><label>Equipo local</label><select id="adm-new-team1" style="${inputStyle}">${KO_TEAM_OPTIONS_HTML}</select></div>
+    <div class="modal-field"><label>Equipo visitante</label><select id="adm-new-team2" style="${inputStyle}">${KO_TEAM_OPTIONS_HTML}</select></div>
+    <div class="modal-field"><label>Fecha</label><input type="date" id="adm-new-date" style="${inputStyle}"></div>
+    <div class="modal-field"><label>Hora</label><input type="time" id="adm-new-time" style="${inputStyle}"></div>
+    <div class="modal-btns"><button class="btn-cancel" onclick="closeModal()">Cancelar</button><button class="btn-confirm" onclick="adminSaveNewMatch()">Guardar</button></div>
+    <div class="msg-err" id="add-match-err"></div>
+    ${deletedHtml}`;
   }
 }
 function handleLeagueAvatar(input){
@@ -958,7 +969,7 @@ function renderMatchesByDate(){
 
   // Grupos
   GROUPS.forEach(g => {
-    (MATCHES_GROUP[g]||[]).forEach(m => {
+    getGroupMatches(g).forEach(m => {
       const sd = S.schedule?.[m.id];
       const date = sd?.date || m.date;
       const time = sd?.time || m.time;
@@ -969,7 +980,7 @@ function renderMatchesByDate(){
   // Fases eliminatorias (solo se incluyen si al menos un partido tiene equipos definidos)
   const koPhaseLabels = { 1:'Dieciseisavos de Final', 2:'Octavos de Final', 3:'Cuartos de Final', 4:'Semifinales', 5:'3er y 4to Puesto', 6:'Final' };
   [1,2,3,4,5,6].forEach(phase => {
-    const koMatches = S.knockoutMatches[phase] || KNOCKOUT_TEMPLATES[phase];
+    const koMatches = getKOMatches(phase);
     const phaseHasTeams = koMatches.some(m => m.n1 !== 'Por definir' || m.n2 !== 'Por definir');
     if(!phaseHasTeams) return; // No mostrar partidos sin equipos definidos en la vista por fecha
     koMatches.forEach(m => {
@@ -1093,7 +1104,7 @@ function renderPhaseBody(){
     const unlockDates = ['','2026-07-04','2026-07-11','2026-07-14','2026-07-15','2026-07-18','2026-07-19'];
     const unlockDt=new Date(unlockDates[S.currentPhase]+'T00:00:00');
     const now=new Date(); const diff=unlockDt-now;
-    const koMatches=S.knockoutMatches[S.currentPhase]||KNOCKOUT_TEMPLATES[S.currentPhase];
+    const koMatches=getKOMatches(S.currentPhase);
     const allDefined=koMatches.some(m=>m.n1!=='Por definir');
     if(diff>0 && !allDefined && !isTotalAdmin()){
       const d=Math.floor(diff/(864e5)), h=Math.floor((diff%(864e5))/36e5);
@@ -1119,14 +1130,15 @@ function selectGroup(g){
 let saveTimers={};
 function renderGroupMatchList(){
   const c=document.getElementById('gmatches'); if(!c) return;
-  const matches=MATCHES_GROUP[S.currentGroup]||[];
+  const matches=getGroupMatches(S.currentGroup);
   const preds=((S.predictions[S.currentLeague]||{})[S.currentUser])||{};
-  c.innerHTML=`<div class="group-header">Grupo ${S.currentGroup}</div>`+matches.map(m=>matchCardHTML(m,preds,false,null)).join('')+`<div class="save-indicator" id="save-ind"></div>`;
+  const addBtn = isTotalAdmin() ? `<button class="btn-admin" style="width:100%;margin:6px 0 10px;border-color:var(--success);color:var(--success)" onclick="openModal('add-match')">➕ Añadir partido a este grupo</button>` : '';
+  c.innerHTML=`<div class="group-header">Grupo ${S.currentGroup}</div>`+addBtn+matches.map(m=>matchCardHTML(m,preds,false,null)).join('')+`<div class="save-indicator" id="save-ind"></div>`;
 }
 
 function renderKOMatches(){
   const c=document.getElementById('ko-matches-list'); if(!c) return;
-  const matches=S.knockoutMatches[S.currentPhase]||KNOCKOUT_TEMPLATES[S.currentPhase];
+  const matches=getKOMatches(S.currentPhase);
   const preds=((S.predictions[S.currentLeague]||{})[S.currentUser])||{};
   // Ordenar por fecha y hora (usando override de S.schedule si existe, igual que en la vista por fecha)
   const sortedMatches = [...matches].sort((a,b)=>{
@@ -1322,6 +1334,7 @@ function matchCardHTML(m, preds, isKnockout, koPhase){
       <button class="btn-admin" onclick="forceToggleLock('${m.id}','0')" style="border-color:var(--success);color:var(--success)">Reabrir</button>
       <button class="btn-admin" onclick="forceToggleLock('${m.id}','1')">Cerrar</button>
       <button class="btn-admin" onclick="forceToggleLock('${m.id}','clear')">Reset</button>
+      <button class="btn-admin" onclick="adminDeleteMatch('${m.id}')" style="border-color:#ef4444;color:#ef4444">🗑️ Eliminar partido</button>
     </div>` : '';
 
   const adminScheduleRow = isTotalAdmin() ? `
@@ -1722,6 +1735,94 @@ async function adminRecalc(mid){
   }catch(e){ console.error('adminRecalc error', e); }
 }
 
+// ===== ADMIN TOTAL: ELIMINAR / AÑADIR PARTIDOS =====
+
+// Elimina un partido POR COMPLETO de la vista de todos los usuarios (predicciones, grupos,
+// tabla por fecha...). No se toca ningún dato de predicciones ya guardado: es reversible
+// desde el propio panel de "Partidos eliminados" del grupo.
+async function adminDeleteMatch(mid){
+  if(!isTotalAdmin()) return;
+  if(!confirm('¿Eliminar este partido de todas las vistas? Podrás restaurarlo después desde "Partidos eliminados".')) return;
+  try{
+    const { doc, getDoc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const ref = doc(fbDb(), 'tournament', 'deleted_matches');
+    const snap = await getDoc(ref);
+    const existing = snap.exists() ? (snap.data()||{}) : {};
+    const next = { ...existing, [mid]: true };
+    await setDoc(ref, next, { merge: false });
+    S.deletedMatches = next;
+    localStorage.setItem('wf26_deleted_matches', JSON.stringify(next));
+    save();
+    renderPhaseBody();
+    if(document.getElementById('tab-grupos')?.classList.contains('active')) renderGruposTab();
+    const ind = document.getElementById('save-ind');
+    if(ind){ ind.textContent='🗑️ Partido eliminado'; setTimeout(()=>{ if(ind) ind.textContent=''; }, 2000); }
+  }catch(e){ console.error('adminDeleteMatch error', e); alert('Error: '+(e?.message||String(e))); }
+}
+
+// Restaura un partido previamente eliminado.
+async function adminRestoreMatch(mid){
+  if(!isTotalAdmin()) return;
+  try{
+    const { doc, getDoc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const ref = doc(fbDb(), 'tournament', 'deleted_matches');
+    const snap = await getDoc(ref);
+    const existing = snap.exists() ? (snap.data()||{}) : {};
+    const next = { ...existing };
+    delete next[mid];
+    await setDoc(ref, next, { merge: false });
+    S.deletedMatches = next;
+    localStorage.setItem('wf26_deleted_matches', JSON.stringify(next));
+    save();
+    renderPhaseBody();
+    if(document.getElementById('tab-grupos')?.classList.contains('active')) renderGruposTab();
+  }catch(e){ console.error('adminRestoreMatch error', e); alert('Error: '+(e?.message||String(e))); }
+}
+
+// Lista, para un grupo dado, los partidos eliminados (id + etiqueta) para poder restaurarlos.
+// Busca tanto en el calendario oficial como en los partidos añadidos manualmente.
+function getDeletedMatchesInfo(group){
+  const all = [ ...(MATCHES_GROUP[group]||[]), ...((S.customMatches&&S.customMatches[group])||[]) ];
+  return all.filter(m => S.deletedMatches && S.deletedMatches[m.id]);
+}
+
+// Guarda un partido nuevo añadido manualmente por el Admin Total dentro de un grupo.
+async function adminSaveNewMatch(){
+  if(!isTotalAdmin()) return;
+  const group = document.getElementById('adm-new-group')?.value;
+  const n1 = document.getElementById('adm-new-team1')?.value?.trim();
+  const n2 = document.getElementById('adm-new-team2')?.value?.trim();
+  const dateVal = document.getElementById('adm-new-date')?.value;
+  const timeVal = document.getElementById('adm-new-time')?.value;
+  const err = document.getElementById('add-match-err');
+  if(!group || !n1 || !n2 || !dateVal || !timeVal){ if(err) err.textContent='Completa todos los campos'; return; }
+  if(n1 === n2){ if(err) err.textContent='Los dos equipos deben ser distintos'; return; }
+  try{
+    const team1 = ALL_TEAMS.find(t => t.n === n1);
+    const team2 = ALL_TEAMS.find(t => t.n === n2);
+    const newId = `${group}_X${Date.now()}`; // prefijo _X para no colisionar nunca con ids oficiales (g+n) o KO (R16_/QF_/SF_/SEMI_/TPP_/FIN_)
+    const newMatch = { id:newId, t1: team1?.f||'🏳️', n1, t2: team2?.f||'🏳️', n2, date:dateVal, time:timeVal, locked:false };
+    const { doc, getDoc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const ref = doc(fbDb(), 'tournament', 'custom_matches');
+    const snap = await getDoc(ref);
+    const existing = snap.exists() ? (snap.data()||{}) : {};
+    const groupList = existing[group] || [];
+    const next = { ...existing, [group]: [...groupList, newMatch] };
+    await setDoc(ref, next, { merge: false });
+    S.customMatches = next;
+    localStorage.setItem('wf26_custom_matches', JSON.stringify(next));
+    save();
+    closeModal();
+    S.currentPhase = 0;
+    S.currentGroup = group;
+    renderPredTab();
+    if(document.getElementById('tab-grupos')?.classList.contains('active')) renderGruposTab();
+  }catch(e){
+    console.error('adminSaveNewMatch error', e);
+    if(err) err.textContent = 'Error al guardar: '+(e?.message||String(e));
+  }
+}
+
 function calcPoints(res, pred, mid){
   if(!res) return 0;
   const rg1=parseInt(res.g1), rg2=parseInt(res.g2);
@@ -1983,7 +2084,7 @@ function computeGroupStandings(group){
   teams.forEach(t => {
     stats[t.n] = { name:t.n, flag:t.f, pj:0, pg:0, pe:0, pp:0, gf:0, gc:0, pts:0 };
   });
-  const matches = MATCHES_GROUP[group] || [];
+  const matches = getGroupMatches(group);
   const h2h = {};
   matches.forEach(m => {
     const res = S.results?.[m.id];
