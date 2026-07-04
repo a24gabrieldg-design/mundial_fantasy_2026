@@ -1436,15 +1436,15 @@ async function savePred(mid){
     const g1=document.getElementById('pred-'+mid+'-1')?.value||'';
     const g2=document.getElementById('pred-'+mid+'-2')?.value||'';
     try{
-      const { doc, setDoc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+      const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
       const predRef = doc(fbDb(), 'leagues', S.currentLeague, 'predictions', S.currentUser);
-      const snap = await getDoc(predRef);
-      const existing = snap.exists()?(snap.data()||{}):{};
-      const next = { ...existing, [mid]: { ...(existing[mid]||{}), g1, g2 } };
-      await setDoc(predRef, next, { merge: false });
+      // merge:true hace un merge atómico solo del campo [mid] en el servidor, sin necesidad
+      // de leer antes el documento entero. Así, si guardas dos partidos casi a la vez (p.ej.
+      // uno de dieciseisavos y otro de octavos), cada guardado solo toca su propio partido y
+      // nunca puede pisar/revertir el resultado que se acaba de guardar para otro partido.
+      await setDoc(predRef, { [mid]: { g1, g2 } }, { merge: true });
       const ind=document.getElementById('save-ind');
       if(ind){ind.textContent='✅ Guardado';setTimeout(()=>{if(ind)ind.textContent='';},1800);}
-      S.predictions[S.currentLeague][S.currentUser] = next;
     }catch(e){ console.error('savePred error', e); }
   },700);
 }
@@ -1514,16 +1514,16 @@ async function saveR16Pred(mid, field, value){
   const realAlreadyDecided = realRes && realRes.r16_winner && realRes.decidedBy;
   if(isForcedClosed || realAlreadyDecided) return;
   try{
-    const { doc, setDoc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const predRef = doc(fbDb(), 'leagues', S.currentLeague, 'predictions', S.currentUser);
-    const snap = await getDoc(predRef);
-    const existing = snap.exists() ? (snap.data()||{}) : {};
-    const prev = existing[mid] || {};
     const fieldKey = field === 'winner' ? 'r16_winner' : 'r16_decidedBy';
-    const next = { ...existing, [mid]: { ...prev, [fieldKey]: value } };
-    await setDoc(predRef, next, { merge: false });
+    // merge:true: solo se toca el campo [mid][fieldKey] en el servidor, sin leer/reescribir
+    // el documento completo, así no puede pisar la predicción de otro partido guardada a la vez.
+    await setDoc(predRef, { [mid]: { [fieldKey]: value } }, { merge: true });
     if(!S.predictions[S.currentLeague]) S.predictions[S.currentLeague] = {};
-    S.predictions[S.currentLeague][S.currentUser] = next;
+    if(!S.predictions[S.currentLeague][S.currentUser]) S.predictions[S.currentLeague][S.currentUser] = {};
+    const prevLocal = S.predictions[S.currentLeague][S.currentUser][mid] || {};
+    S.predictions[S.currentLeague][S.currentUser][mid] = { ...prevLocal, [fieldKey]: value };
     const ind = document.getElementById('save-ind');
     if(ind){ ind.textContent='✅ Guardado'; setTimeout(()=>{ if(ind) ind.textContent=''; }, 1800); }
     renderPhaseBody();
