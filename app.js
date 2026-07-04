@@ -1488,12 +1488,19 @@ async function savePred(mid){
   if(!S.predictions[S.currentLeague][S.currentUser]) S.predictions[S.currentLeague][S.currentUser]={};
   const prev = S.predictions[S.currentLeague][S.currentUser][mid] || {};
   S.predictions[S.currentLeague][S.currentUser][mid] = { ...prev, g1:g1now, g2:g2now };
+  // IMPORTANTE: guardamos ya mismo una copia local (localStorage), sin esperar a Firestore.
+  // Antes esto no se hacía, así que si la escritura a Firestore fallaba (permisos, red,
+  // recarga antes de que terminara el debounce, etc.) la predicción desaparecía por
+  // completo: ni en el servidor ni en local. Con esto, al menos en tu propio dispositivo
+  // siempre queda guardado lo último que escribiste, aunque el servidor falle.
+  save();
   // Actualizar visibilidad del decider KO sin destruir el DOM completo
   updateKODeciderVisibility(mid);
   clearTimeout(saveTimers[mid]);
   saveTimers[mid]=setTimeout(async ()=>{
     const g1=document.getElementById('pred-'+mid+'-1')?.value||'';
     const g2=document.getElementById('pred-'+mid+'-2')?.value||'';
+    const ind=document.getElementById('save-ind');
     try{
       const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
       const predRef = doc(fbDb(), 'leagues', S.currentLeague, 'predictions', S.currentUser);
@@ -1502,9 +1509,15 @@ async function savePred(mid){
       // uno de dieciseisavos y otro de octavos), cada guardado solo toca su propio partido y
       // nunca puede pisar/revertir el resultado que se acaba de guardar para otro partido.
       await setDoc(predRef, { [mid]: { g1, g2 } }, { merge: true });
-      const ind=document.getElementById('save-ind');
       if(ind){ind.textContent='✅ Guardado';setTimeout(()=>{if(ind)ind.textContent='';},1800);}
-    }catch(e){ console.error('savePred error', e); }
+    }catch(e){
+      console.error('savePred error', e);
+      // ANTES: el error solo se veía en la consola del navegador, así que el usuario creía
+      // que se había guardado cuando en realidad nunca llegó al servidor (y por tanto sus
+      // amigos en la liga nunca lo veían). Ahora se avisa explícitamente.
+      if(ind){ ind.textContent='❌ No se pudo guardar en el servidor'; ind.style.color='#e63946'; setTimeout(()=>{ if(ind){ ind.textContent=''; ind.style.color=''; } },4000); }
+      alert('No se pudo guardar tu predicción en el servidor (se ha guardado solo en este dispositivo). Motivo: '+(e?.message||String(e))+'\n\nRevisa tu conexión y vuelve a intentarlo; si el problema persiste, puede ser un permiso de Firestore.');
+    }
   },700);
 }
 
@@ -1572,21 +1585,31 @@ async function saveR16Pred(mid, field, value){
   const realRes = S.results[mid];
   const realAlreadyDecided = realRes && realRes.r16_winner && realRes.decidedBy;
   if(isForcedClosed || realAlreadyDecided) return;
+  const fieldKey = field === 'winner' ? 'r16_winner' : 'r16_decidedBy';
+  // Igual que en savePred: actualizamos el estado local y lo persistimos en localStorage
+  // ANTES de intentar escribir en Firestore, para no perder el dato si la escritura falla.
+  if(!S.predictions[S.currentLeague]) S.predictions[S.currentLeague] = {};
+  if(!S.predictions[S.currentLeague][S.currentUser]) S.predictions[S.currentLeague][S.currentUser] = {};
+  const prevLocal = S.predictions[S.currentLeague][S.currentUser][mid] || {};
+  S.predictions[S.currentLeague][S.currentUser][mid] = { ...prevLocal, [fieldKey]: value };
+  save();
+  renderPhaseBody();
+  const ind = document.getElementById('save-ind');
   try{
     const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const predRef = doc(fbDb(), 'leagues', S.currentLeague, 'predictions', S.currentUser);
-    const fieldKey = field === 'winner' ? 'r16_winner' : 'r16_decidedBy';
     // merge:true: solo se toca el campo [mid][fieldKey] en el servidor, sin leer/reescribir
     // el documento completo, así no puede pisar la predicción de otro partido guardada a la vez.
     await setDoc(predRef, { [mid]: { [fieldKey]: value } }, { merge: true });
-    if(!S.predictions[S.currentLeague]) S.predictions[S.currentLeague] = {};
-    if(!S.predictions[S.currentLeague][S.currentUser]) S.predictions[S.currentLeague][S.currentUser] = {};
-    const prevLocal = S.predictions[S.currentLeague][S.currentUser][mid] || {};
-    S.predictions[S.currentLeague][S.currentUser][mid] = { ...prevLocal, [fieldKey]: value };
-    const ind = document.getElementById('save-ind');
     if(ind){ ind.textContent='✅ Guardado'; setTimeout(()=>{ if(ind) ind.textContent=''; }, 1800); }
-    renderPhaseBody();
-  }catch(e){ console.error('saveR16Pred error', e); }
+  }catch(e){
+    console.error('saveR16Pred error', e);
+    // ANTES este error se tragaba en silencio: el usuario veía su elección marcada en
+    // pantalla (estado local) pero nunca llegaba al servidor, así que ni persistía al
+    // recargar en otro dispositivo ni la veían sus amigos de liga.
+    if(ind){ ind.textContent='❌ No se pudo guardar en el servidor'; ind.style.color='#e63946'; setTimeout(()=>{ if(ind){ ind.textContent=''; ind.style.color=''; } },4000); }
+    alert('No se pudo guardar tu elección en el servidor (se ha guardado solo en este dispositivo). Motivo: '+(e?.message||String(e)));
+  }
 }
 
 async function adminSetResult(mid){
