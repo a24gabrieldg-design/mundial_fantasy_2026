@@ -2439,6 +2439,59 @@ async function debugDumpPredictions(){
 window.debugDumpPredictions = debugDumpPredictions;
 self.debugDumpPredictions = debugDumpPredictions;
 
+// ===== MIGRACIÓN DE IDS ANTIGUOS DE ELIMINATORIAS =====
+// Hace tiempo los partidos KO se guardaban con prefijos genéricos (ej. 'R16_') en vez de
+// llevar el número de fase incrustado (ej. 'KO1_'). Al cambiar el esquema de IDs para evitar
+// que dos fases distintas compartan id por error, las predicciones ya guardadas bajo el
+// prefijo viejo quedaron "huérfanas": siguen en Firestore, pero la app ya no las busca ahí,
+// así que parecía que se habían borrado. Esta migración copia esos datos al id nuevo
+// correspondiente SIN tocar en ningún momento el esquema de ids actual ni renombrar nada
+// a la fuerza: solo añade en el campo nuevo lo que había en el campo viejo, y únicamente si
+// el campo nuevo todavía no tiene un resultado real (para no pisar nunca una predicción ya
+// hecha bajo el id correcto). El campo viejo se deja intacto (no molesta: la app ya no lo lee).
+const LEGACY_KO_PREFIX_MAP = {
+  'R16_': 'KO1_'
+  // Si en el futuro aparece algún otro prefijo antiguo (p.ej. de Octavos/Cuartos/Semis),
+  // añadirlo aquí con su equivalente nuevo, p.ej.: 'QF_': 'KO2_', 'SF_': 'KO3_', etc.
+};
+
+async function migrateLegacyKOPredictions(leagueCode, uid){
+  try{
+    if(!leagueCode || !uid) return;
+    const { doc, getDoc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const predRef = doc(fbDb(), 'leagues', leagueCode, 'predictions', uid);
+    const snap = await getDoc(predRef);
+    if(!snap.exists()) return;
+    const data = snap.data() || {};
+    const updates = {};
+    let changed = false;
+
+    for(const [oldPrefix, newPrefix] of Object.entries(LEGACY_KO_PREFIX_MAP)){
+      Object.keys(data).forEach(key=>{
+        if(!key.startsWith(oldPrefix)) return;
+        const suffix = key.slice(oldPrefix.length);
+        const newKey = newPrefix + suffix;
+        const oldVal = data[key] || {};
+        const newVal = data[newKey];
+        const newHasRealData = newVal && ((newVal.g1 !== undefined && newVal.g1 !== '') || (newVal.g2 !== undefined && newVal.g2 !== ''));
+        if(newHasRealData) return; // no pisar una predicción ya hecha bajo el id nuevo
+        updates[newKey] = { ...(newVal||{}), ...oldVal };
+        changed = true;
+      });
+    }
+
+    if(changed){
+      await setDoc(predRef, updates, { merge: true });
+      if(!S.predictions[leagueCode]) S.predictions[leagueCode] = {};
+      if(!S.predictions[leagueCode][uid]) S.predictions[leagueCode][uid] = {};
+      Object.assign(S.predictions[leagueCode][uid], updates);
+      console.log('wf26: predicciones antiguas migradas en liga', leagueCode, 'usuario', uid, updates);
+    }
+  }catch(e){
+    console.error('migrateLegacyKOPredictions error', leagueCode, uid, e);
+  }
+}
+
 // ===== PREDICCIONES (Firestore -> cache local) =====
 async function loadPredictionsFromFirestoreForCurrentUser(){
   try{
@@ -2463,6 +2516,12 @@ async function loadPredictionsFromFirestoreForCurrentUser(){
       // lo volcamos tal cual para que la UI pinte g1/g2 y ranking use points si existen.
       if(!S.predictions[code]) S.predictions[code] = {};
       S.predictions[code][S.currentUser] = data;
+
+      // Autoreparar predicciones antiguas de KO guardadas con el prefijo viejo (ver
+      // migrateLegacyKOPredictions arriba). Se ejecuta sola cada vez que el usuario
+      // carga sus predicciones (login / recarga de la app), así no hace falta ninguna
+      // acción manual ni tocar los ids actuales de los partidos.
+      await migrateLegacyKOPredictions(code, S.currentUser);
     }
   }catch(e){
     console.error('loadPredictionsFromFirestoreForCurrentUser error', e);
