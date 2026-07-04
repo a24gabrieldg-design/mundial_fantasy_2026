@@ -1,4 +1,4 @@
-// ===== DATA =====
+// ===== DATA =====.
 const PHASES = ['Fase de Grupos','Dieciseisavos de Final','Octavos de Final','Cuartos de Final','Semifinales','3er y 4to Puesto','Final'];
 const GROUPS = ['A','B','C','D','E','F','G','H','I','J','K','L'];
 
