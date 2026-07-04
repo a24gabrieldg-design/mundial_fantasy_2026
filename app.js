@@ -1992,9 +1992,10 @@ async function ensureLeaguePredictionsLoaded(leagueCode, memberUids){
 async function ensureUsersLoaded(uids){
   try{
     const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
-    // Cargar usuarios que no están en caché O que están en caché sin avatar (puede que
-    // hayan subido foto después de la primera carga, y el otro usuario nunca lo vería)
-    const need=(uids||[]).filter(uid=>uid&&(!S.users?.[uid] || S.users[uid].avatar===null));
+    // Siempre se recarga desde Firestore (nunca nos fiamos de la caché local): así, si un
+    // miembro de la liga sube o cambia su foto de perfil desde OTRO dispositivo/red, el resto
+    // la ve en cuanto vuelva a abrir la Tabla, sin depender de que su avatar estuviera vacío.
+    const need=(uids||[]).filter(uid=>!!uid);
     await Promise.all(need.map(async uid=>{
       const snap=await getDoc(doc(fbDb(),'users',uid));
       if(snap.exists()){
