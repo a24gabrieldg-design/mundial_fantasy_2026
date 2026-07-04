@@ -403,7 +403,62 @@ async function fetchTournamentOverrides(){
   }
 }
 
-// Admin: forzar fecha/hora de un partido (prioridad sobre la API externa)
+// Admin: repara ids de cruces KO corruptos/duplicados entre fases.
+// PROBLEMA DETECTADO: en 'tournament/knockout_overrides', algunos partidos de fases
+// posteriores a Dieciseisavos quedaron guardados con un 'id' que coincide con el de
+// un partido de OTRA fase (p.ej. un partido de Octavos guardado con id 'R16_14',
+// el mismo id que un partido real de Dieciseisavos). Como el 'id' es la clave que se
+// usa para guardar resultados y predicciones, dos partidos con el mismo id comparten
+// literalmente el mismo resultado: por eso parecía que "cambiar uno cambiaba el otro".
+// Esta función reasigna, fase por fase (2 a 6), el id de cada partido al id canónico
+// que le corresponde en KNOCKOUT_TEMPLATES según su posición, dejando intactos los
+// equipos (n1/n2/t1/t2) ya definidos. Los ids de Dieciseisavos (fase 1) se consideran
+// la fuente correcta y no se tocan.
+// IMPORTANTE: si algún partido afectado ya tenía un resultado guardado bajo el id
+// duplicado, ese resultado pertenece ambiguamente a AMBOS partidos que compartían el
+// id, así que no se migra automáticamente (sería adivinar). Tras reparar, revisa y
+// vuelve a introducir el resultado real de los partidos que hayan cambiado de id.
+async function adminRepairKOIds(){
+  if(!isTotalAdmin()) return;
+  if(!confirm('Esto va a corregir los ids de los cruces de Octavos/Cuartos/Semis/3-4º/Final que estén duplicados con los de Dieciseisavos.\n\nSi algún partido afectado ya tenía resultado guardado, tendrás que volver a introducirlo después (no se puede migrar automáticamente porque el id estaba compartido con otro partido). ¿Continuar?')) return;
+  try{
+    const { doc, getDoc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const ref = doc(fbDb(), 'tournament', 'knockout_overrides');
+    const snap = await getDoc(ref);
+    const existing = snap.exists() ? (snap.data()||{}) : {};
+    const changes = []; // {phase, oldId, newId}
+    const next = { ...existing };
+    [2,3,4,5,6].forEach(phase=>{
+      const arr = existing[phase];
+      if(!Array.isArray(arr)) return;
+      const template = KNOCKOUT_TEMPLATES[phase] || [];
+      const fixedArr = arr.map((m,i)=>{
+        const canonicalId = template[i]?.id;
+        if(!canonicalId || m.id === canonicalId) return m;
+        changes.push({ phase, oldId: m.id, newId: canonicalId });
+        return { ...m, id: canonicalId };
+      });
+      next[phase] = fixedArr;
+    });
+    if(changes.length === 0){
+      alert('No se ha encontrado ningún id duplicado/incorrecto en Octavos, Cuartos, Semis, 3-4º puesto o Final. Si el problema persiste, dime exactamente qué id ves duplicado en el inspector.');
+      return;
+    }
+    await setDoc(ref, next, { merge: false });
+    S.knockoutOverrides = next;
+    [2,3,4,5,6].forEach(phase=>{ if(next[phase]) S.knockoutMatches[phase] = next[phase]; });
+    localStorage.setItem('wf26_ko_overrides', JSON.stringify(next));
+    save();
+    renderPhaseBody();
+    const detail = changes.map(c=>`Fase ${c.phase}: ${c.oldId} → ${c.newId}`).join('\n');
+    alert('Ids corregidos:\n\n'+detail+'\n\nRevisa estos partidos: si tenían resultado guardado, vuelve a introducirlo, porque ese resultado estaba compartido con el partido que tenía el mismo id.');
+  }catch(e){
+    console.error('adminRepairKOIds error', e);
+    alert('Error al reparar: '+(e?.message||String(e)));
+  }
+}
+
+
 async function adminSetSchedule(mid){
   if(!isTotalAdmin()) return;
   const dateVal = document.getElementById('adm-date-'+mid)?.value;
@@ -1116,7 +1171,10 @@ function renderPhaseBody(){
       body.innerHTML=`<div class="lock-card"><div class="lock-icon">⏳</div><div class="lock-msg">${PHASES[S.currentPhase]}</div><div class="lock-sub">Los cruces se publicarán próximamente</div></div>`;
       return;
     }
-    body.innerHTML=`<div id="ko-matches-list"></div>`;
+    const repairBtn = isTotalAdmin()
+      ? `<button class="btn-admin" style="width:100%;margin-bottom:8px;border-color:#f59e0b;color:#f59e0b" onclick="adminRepairKOIds()">🔧 Reparar ids de cruces (si dos partidos comparten resultado)</button>`
+      : '';
+    body.innerHTML=repairBtn+`<div id="ko-matches-list"></div>`;
     renderKOMatches();
   }
 }
