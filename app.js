@@ -1591,7 +1591,7 @@ async function adminSetResult(mid){
     renderRanking();
     const ind=document.getElementById('save-ind');
     if(ind){ind.textContent='✅ Resultado guardado';setTimeout(()=>{if(ind)ind.textContent='';},2000);}
-  }catch(e){ console.error('adminSetResult error', e); }
+  }catch(e){ console.error('adminSetResult error', e); alert('Error al guardar el resultado: '+(e?.message||String(e))); }
 }
 
 // El admin fija el resultado REAL de quién pasó / cómo (prórroga o penaltis) cuando
@@ -1743,7 +1743,7 @@ async function adminRecalc(mid){
     renderRanking();
     const ind=document.getElementById('save-ind');
     if(ind){ind.textContent='✅ Puntos recalculados';setTimeout(()=>{if(ind)ind.textContent='';},2000);}
-  }catch(e){ console.error('adminRecalc error', e); }
+  }catch(e){ console.error('adminRecalc error', e); alert('Error al recalcular: '+(e?.message||String(e))); }
 }
 
 // ===== ADMIN TOTAL: ELIMINAR / AÑADIR PARTIDOS =====
