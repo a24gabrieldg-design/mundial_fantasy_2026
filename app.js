@@ -212,26 +212,51 @@ function getGroupMatches(g){
   return all.filter(m => !(S.deletedMatches && S.deletedMatches[m.id]));
 }
 
-// Devuelve los partidos de una fase KO excluyendo los eliminados por el admin.
-// NORMALIZACIÓN DE ID: el id de cada partido de KO se recalcula SIEMPRE a partir de su
-// fase + posición (el id canónico de KNOCKOUT_TEMPLATES), sin fiarse del id que viniera
-// guardado en Firestore. Antes, si un partido quedaba guardado con un id equivocado
-// (por ejemplo copiado de otra fase), ese id corrupto se usaba tal cual para pintar los
-// inputs/botones del admin y para guardar resultados/predicciones — así que dos
-// partidos de fases distintas podían acabar compartiendo id (y por tanto resultado) sin
-// que el botón de reparación lo detectara siempre (p.ej. si el array de esa fase tenía
-// más partidos de la cuenta). Con esta normalización, el id mostrado y usado para
-// guardar es SIEMPRE único por fase+posición, pase lo que pase con los datos guardados.
-// Si el array guardado tiene más partidos de los que le tocan a esa fase, los sobrantes
-// se descartan (no corresponden a ningún cruce real del bracket).
-function getKOMatches(phase){
+// Normaliza el array de partidos de una fase KO a la longitud fija de su plantilla
+// (KNOCKOUT_TEMPLATES), asignando siempre el id canónico por posición.
+// Si el array guardado tiene MÁS partidos de los que le tocan a esa fase (por
+// corrupción antigua: partidos acumulados en el sitio equivocado), no se recorta a lo
+// bruto por orden de array — eso podía cortar justo los cruces que el admin ya había
+// configurado (con equipos reales) si quedaban "detrás" de partidos placeholder/basura,
+// dejando "Por definir vs Por definir" en su lugar. En su lugar, se priorizan los
+// partidos que YA tienen algún equipo definido, y solo se completa con placeholders si
+// sobran huecos. Se usa la MISMA función al leer (getKOMatches) y al guardar
+// (adminSetKnockoutTeams) para que la posición que ve y edita el admin sea siempre la
+// misma que se graba.
+function normalizeKOPhase(phase, rawArr){
   const template = KNOCKOUT_TEMPLATES[phase] || [];
-  const raw = (S.knockoutMatches[phase] || template || []).slice(0, template.length);
-  const normalized = raw.map((m,i)=>{
-    const canonicalId = template[i]?.id;
-    if(!canonicalId || m.id === canonicalId) return m;
-    return { ...m, id: canonicalId };
-  });
+  const raw = Array.isArray(rawArr) ? rawArr : [];
+  let ordered;
+  if(raw.length <= template.length){
+    // Caso normal: no hay partidos "de más" en el array guardado, así que se respeta el
+    // orden tal cual está. Esto es importante: si reordenáramos siempre (poniendo los
+    // partidos con equipo definido primero), la posición -y por tanto el id- de un
+    // partido placeholder cambiaría cada vez que se completara OTRO partido de la
+    // misma fase, desestabilizando los ids con el tiempo en vez de arreglarlos.
+    ordered = raw;
+  } else {
+    // Caso corrupto: el array tiene más partidos de los que le tocan a esta fase
+    // (basura acumulada de un bug antiguo). Aquí sí hace falta un criterio de rescate:
+    // se prioriza conservar los partidos que YA tienen algún equipo definido, para no
+    // perderlos si quedaban "detrás" de partidos placeholder en el array. Una vez el
+    // admin vuelva a guardar un cruce de esta fase, el array queda recortado a la
+    // longitud correcta y a partir de ahí ya no vuelve a entrar por esta rama.
+    const hasTeams = (m) => m && ((m.n1 && m.n1 !== 'Por definir') || (m.n2 && m.n2 !== 'Por definir'));
+    const withTeams = raw.filter(hasTeams);
+    const placeholders = raw.filter(m => !hasTeams(m));
+    ordered = [...withTeams, ...placeholders];
+  }
+  ordered = ordered.slice(0, template.length);
+  return template.map((t,i)=>({ ...t, ...(ordered[i]||{}), id: t.id }));
+}
+
+// Devuelve los partidos de una fase KO excluyendo los eliminados por el admin.
+// El id de cada partido es SIEMPRE el canónico de su fase+posición (ver normalizeKOPhase
+// arriba), nunca el que viniera guardado en Firestore, para que dos partidos de fases
+// distintas no puedan compartir id (y por tanto resultado/predicciones) pase lo que pase
+// con los datos guardados.
+function getKOMatches(phase){
+  const normalized = normalizeKOPhase(phase, S.knockoutMatches[phase] || KNOCKOUT_TEMPLATES[phase]);
   return normalized.filter(m => !(S.deletedMatches && S.deletedMatches[m.id]));
 }
 
@@ -534,8 +559,10 @@ async function adminSetKnockoutTeams(phase, mid){
     const existingArr = existing[phase] || [];
     // Reconstruye la fase ENTERA con longitud fija = la de la plantilla, forzando en cada
     // posición el id canónico correspondiente (auto-repara cualquier corrupción previa
-    // en esa fase cada vez que el admin guarda un cruce).
-    const normalizedPhase = template.map((t,i)=>({ ...t, ...(existingArr[i]||{}), id: t.id }));
+    // en esa fase cada vez que el admin guarda un cruce). Se usa la MISMA normalización
+    // (normalizeKOPhase) que pinta la UI (getKOMatches), para que la posición que el
+    // admin acaba de editar sea exactamente la misma que se sobreescribe aquí.
+    const normalizedPhase = normalizeKOPhase(phase, existingArr);
     normalizedPhase[idx] = { ...normalizedPhase[idx], n1, n2, t1, t2, id: template[idx].id };
     const next = { ...existing, [phase]: normalizedPhase };
     await setDoc(ref, next, { merge: false });
