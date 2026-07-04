@@ -2121,6 +2121,18 @@ async function ensureLeaguePredictionsLoaded(leagueCode, memberUids){
     if(!S.predictions[leagueCode]) S.predictions[leagueCode] = {};
     const snaps = await getDocs(collection(fbDb(), 'leagues', leagueCode, 'predictions'));
     snaps.forEach(d=>{
+      // IMPORTANTE: NUNCA pisar aquí las predicciones del propio usuario actual.
+      // Esta función se llama cada vez que se cambia de fase o se abre la pestaña de
+      // predicciones (renderPredTab -> ensureLeaguePredictionsLoaded), y su único propósito
+      // es traer las predicciones de LOS DEMÁS miembros para el panel de rivales.
+      // Antes, si el usuario acababa de guardar una predicción y cambiaba de fase antes de
+      // que terminara de propagarse la escritura a Firestore (debounce de 700ms + latencia
+      // de red), esta función volvía a leer la copia todavía antigua del servidor y
+      // sobrescribía en memoria la predicción recién hecha, haciéndola "desaparecer" de la
+      // pantalla aunque sí se hubiera guardado. Las predicciones propias siempre viven ya
+      // en S.predictions/localStorage (savePred/saveR16Pred) y son la fuente de verdad local;
+      // no hace falta ni conviene recargarlas desde aquí.
+      if(d.id === S.currentUser) return;
       S.predictions[leagueCode][d.id] = d.data() || {};
     });
   }catch(e){
@@ -2130,6 +2142,7 @@ async function ensureLeaguePredictionsLoaded(leagueCode, memberUids){
       const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
       if(!S.predictions[leagueCode]) S.predictions[leagueCode] = {};
       await Promise.all((memberUids||[]).map(async uid => {
+        if(uid === S.currentUser) return; // ver comentario arriba: nunca pisar las propias
         try{
           const snap = await getDoc(doc(fbDb(), 'leagues', leagueCode, 'predictions', uid));
           S.predictions[leagueCode][uid] = snap.exists() ? (snap.data()||{}) : {};
