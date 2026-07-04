@@ -2410,6 +2410,35 @@ function renderGruposTab(){
   });
 }
 
+// ===== TEMPORAL: DEBUG PARA DIAGNOSTICAR IDS ANTIGUOS DE PARTIDOS KO =====
+// Esta función es solo para depurar el problema de predicciones "desaparecidas" por
+// cambio de IDs de partidos KO. Lee el documento crudo de Firestore (sin pasar por la
+// lógica de la app) y muestra sus claves. Se puede borrar una vez resuelto el problema.
+async function debugDumpPredictions(){
+  try{
+    if(!S.currentUser){ alert('No has iniciado sesión'); return; }
+    if(!S.currentLeague){ alert('No tienes una liga seleccionada (ve a la pestaña Predicciones y selecciona una liga primero)'); return; }
+    const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const predRef = doc(fbDb(), 'leagues', S.currentLeague, 'predictions', S.currentUser);
+    const snap = await getDoc(predRef);
+    if(!snap.exists()){
+      alert('No existe ningún documento de predicciones para ti en esta liga (' + S.currentLeague + ')');
+      return;
+    }
+    const data = snap.data() || {};
+    const keys = Object.keys(data);
+    console.log('wf26 DEBUG - predicciones crudas de Firestore:', data);
+    // Mostramos todo en un alert legible, ya que la consola no siempre es accesible cómodamente en móvil
+    const lines = keys.map(k => k + ' => ' + JSON.stringify(data[k]));
+    alert('Liga: ' + S.currentLeague + '\nClaves guardadas (' + keys.length + '):\n\n' + lines.join('\n'));
+  }catch(e){
+    console.error('debugDumpPredictions error', e);
+    alert('Error al leer el documento: ' + (e?.message || String(e)));
+  }
+}
+window.debugDumpPredictions = debugDumpPredictions;
+self.debugDumpPredictions = debugDumpPredictions;
+
 // ===== PREDICCIONES (Firestore -> cache local) =====
 async function loadPredictionsFromFirestoreForCurrentUser(){
   try{
