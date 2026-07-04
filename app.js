@@ -1,4 +1,4 @@
-// ===== DATA =====.
+// ===== DATA =====
 const PHASES = ['Fase de Grupos','Dieciseisavos de Final','Octavos de Final','Cuartos de Final','Semifinales','3er y 4to Puesto','Final'];
 const GROUPS = ['A','B','C','D','E','F','G','H','I','J','K','L'];
 
@@ -213,9 +213,26 @@ function getGroupMatches(g){
 }
 
 // Devuelve los partidos de una fase KO excluyendo los eliminados por el admin.
+// NORMALIZACIÓN DE ID: el id de cada partido de KO se recalcula SIEMPRE a partir de su
+// fase + posición (el id canónico de KNOCKOUT_TEMPLATES), sin fiarse del id que viniera
+// guardado en Firestore. Antes, si un partido quedaba guardado con un id equivocado
+// (por ejemplo copiado de otra fase), ese id corrupto se usaba tal cual para pintar los
+// inputs/botones del admin y para guardar resultados/predicciones — así que dos
+// partidos de fases distintas podían acabar compartiendo id (y por tanto resultado) sin
+// que el botón de reparación lo detectara siempre (p.ej. si el array de esa fase tenía
+// más partidos de la cuenta). Con esta normalización, el id mostrado y usado para
+// guardar es SIEMPRE único por fase+posición, pase lo que pase con los datos guardados.
+// Si el array guardado tiene más partidos de los que le tocan a esa fase, los sobrantes
+// se descartan (no corresponden a ningún cruce real del bracket).
 function getKOMatches(phase){
-  const all = S.knockoutMatches[phase] || KNOCKOUT_TEMPLATES[phase] || [];
-  return all.filter(m => !(S.deletedMatches && S.deletedMatches[m.id]));
+  const template = KNOCKOUT_TEMPLATES[phase] || [];
+  const raw = (S.knockoutMatches[phase] || template || []).slice(0, template.length);
+  const normalized = raw.map((m,i)=>{
+    const canonicalId = template[i]?.id;
+    if(!canonicalId || m.id === canonicalId) return m;
+    return { ...m, id: canonicalId };
+  });
+  return normalized.filter(m => !(S.deletedMatches && S.deletedMatches[m.id]));
 }
 
 const getCurrentUserEmail = () => {
@@ -505,15 +522,25 @@ async function adminSetKnockoutTeams(phase, mid){
     const ref = doc(fbDb(), 'tournament', 'knockout_overrides');
     const snap = await getDoc(ref);
     const existing = snap.exists() ? (snap.data()||{}) : {};
-    const phaseMatches = existing[phase] || KNOCKOUT_TEMPLATES[phase].map(m=>({...m}));
-    const idx = phaseMatches.findIndex(m=>m.id===mid);
-    const base = idx>-1 ? phaseMatches[idx] : KNOCKOUT_TEMPLATES[phase].find(m=>m.id===mid);
-    const updatedMatch = { ...base, n1, n2, t1, t2 };
-    const updatedPhase = idx>-1 ? phaseMatches.map((m,i)=>i===idx?updatedMatch:m) : [...phaseMatches, updatedMatch];
-    const next = { ...existing, [phase]: updatedPhase };
+    const template = KNOCKOUT_TEMPLATES[phase] || [];
+    // La posición del partido dentro de la fase se resuelve SIEMPRE contra la plantilla
+    // canónica (mid ya nos llega canónico porque la UI se pinta con getKOMatches, que
+    // normaliza). Ya no se busca "mid" dentro del array guardado en Firestore: si ese
+    // array estuviera corrupto (con ids repetidos o de otra fase), buscar por id ahí
+    // podía no encontrar coincidencia y terminaba AÑADIENDO un partido nuevo en vez de
+    // reemplazar el que tocaba, empeorando la corrupción con el tiempo.
+    const idx = template.findIndex(t=>t.id===mid);
+    if(idx===-1){ alert('Id de partido no reconocido: '+mid); return; }
+    const existingArr = existing[phase] || [];
+    // Reconstruye la fase ENTERA con longitud fija = la de la plantilla, forzando en cada
+    // posición el id canónico correspondiente (auto-repara cualquier corrupción previa
+    // en esa fase cada vez que el admin guarda un cruce).
+    const normalizedPhase = template.map((t,i)=>({ ...t, ...(existingArr[i]||{}), id: t.id }));
+    normalizedPhase[idx] = { ...normalizedPhase[idx], n1, n2, t1, t2, id: template[idx].id };
+    const next = { ...existing, [phase]: normalizedPhase };
     await setDoc(ref, next, { merge: false });
     S.knockoutOverrides = next;
-    S.knockoutMatches[phase] = updatedPhase;
+    S.knockoutMatches[phase] = normalizedPhase;
     localStorage.setItem('wf26_ko_overrides', JSON.stringify(next));
 
     // Auto-abrir el partido si ambos equipos están definidos
@@ -1467,7 +1494,7 @@ function toggleKOEditSelects(mid, koPhase){
   // Si ya tiene contenido, solo mostrar
   if(!container.dataset.built){
     container.dataset.built = '1';
-    const koMatch = (S.knockoutMatches[koPhase]||KNOCKOUT_TEMPLATES[koPhase]||[]).find(m=>m.id===mid) || {};
+    const koMatch = getKOMatches(koPhase).find(m=>m.id===mid) || {};
     container.innerHTML = `
       <span style="font-size:10px;color:var(--admin);font-weight:700;width:100%">EQUIPOS:</span>
       <select id="adm-ko-sel1-${mid}" style="flex:1;min-width:120px;padding:6px 8px;border-radius:8px;background:var(--bg3);color:var(--text);border:1px solid var(--border);font-size:12px">
