@@ -160,7 +160,11 @@ let S = {
   scheduleOverrides: JSON.parse(localStorage.getItem('wf26_sched_overrides')||'{}'),
   // cruces de fases knockout definidos por admin (mapa PLANO por id de partido, no por fase,
   // para poder guardarse con merge:true de forma atómica sin afectar a otros partidos): { [mid]: {n1,n2,t1,t2} }
-  knockoutOverrides: JSON.parse(localStorage.getItem('wf26_ko_overrides')||'{}'),
+  // OJO: normalizamos aquí mismo el caché de localStorage. Si el navegador todavía tenía
+  // guardado el formato ANTIGUO de knockoutOverrides (agrupado por fase, de antes de este
+  // cambio), sin este normalize la app no reconocía los cruces ya asignados y el bracket
+  // de dieciseisavos (y cualquier otra fase con cruces guardados) se veía vacío al arrancar.
+  knockoutOverrides: normalizeKnockoutOverrides_(JSON.parse(localStorage.getItem('wf26_ko_overrides')||'{}')),
   // partidos eliminados por el admin (ocultos de toda la app): { [mid]: true }
   deletedMatches: JSON.parse(localStorage.getItem('wf26_deleted_matches')||'{}'),
   // partidos creados manualmente por el admin (no forman parte del calendario oficial): { [customId]: {n1,n2,t1,t2,date,time,phase,group} }
@@ -408,7 +412,7 @@ async function fetchAdminResultsFromFirestore(){
 // eliminados y partidos personalizados) desde Firestore.
 async function fetchTournamentOverrides(){
   try{
-    const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
+    const { doc, getDoc, setDoc } = await import('https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js');
     const [schedSnap, koSnap, lockSnap, swapSnap, delSnap, customSnap] = await Promise.all([
       getDoc(doc(fbDb(), 'tournament', 'schedule_overrides')),
       getDoc(doc(fbDb(), 'tournament', 'knockout_overrides')),
@@ -417,8 +421,9 @@ async function fetchTournamentOverrides(){
       getDoc(doc(fbDb(), 'tournament', 'deleted_matches')),
       getDoc(doc(fbDb(), 'tournament', 'custom_matches'))
     ]);
+    const koRaw = koSnap.exists() ? (koSnap.data()||{}) : {};
     S.scheduleOverrides = schedSnap.exists() ? (schedSnap.data()||{}) : {};
-    S.knockoutOverrides = normalizeKnockoutOverrides_(koSnap.exists() ? (koSnap.data()||{}) : {});
+    S.knockoutOverrides = normalizeKnockoutOverrides_(koRaw);
     S.lockOverrides = lockSnap.exists() ? (lockSnap.data()||{}) : {};
     S.swappedMatches = swapSnap.exists() ? (swapSnap.data()||{}) : {};
     S.deletedMatches = delSnap.exists() ? (delSnap.data()||{}) : {};
@@ -430,6 +435,19 @@ async function fetchTournamentOverrides(){
     localStorage.setItem('wf26_swapped', JSON.stringify(S.swappedMatches));
     localStorage.setItem('wf26_deleted_matches', JSON.stringify(S.deletedMatches));
     localStorage.setItem('wf26_custom_matches', JSON.stringify(S.customMatches));
+
+    // Auto-migración: si el documento en Firestore todavía tiene el formato ANTIGUO
+    // (claves de fase con arrays), lo reescribimos ya limpio en el formato plano nuevo.
+    // Solo lo puede hacer el admin (las reglas de Firestore no dejan escribir a nadie más
+    // en /tournament), así que basta con que el admin abra la app una vez para que el
+    // cruce guardado quede definitivo y todo el mundo vuelva a verlo correctamente.
+    const hasOldFormat = Object.values(koRaw||{}).some(v => Array.isArray(v));
+    if(hasOldFormat && isTotalAdmin()){
+      try{
+        await setDoc(doc(fbDb(), 'tournament', 'knockout_overrides'), S.knockoutOverrides, { merge: false });
+        console.log('[wf26] knockout_overrides migrado al formato plano correctamente');
+      }catch(migErr){ console.error('[wf26] error migrando knockout_overrides', migErr); }
+    }
   }catch(e){
     console.error('fetchTournamentOverrides error', e);
   }
